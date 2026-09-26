@@ -281,14 +281,20 @@ async def claude_turn(
 def command_guidance(config: Config) -> str:
     """How the edit turn should run commands, so the guard has nothing to refuse."""
     text = (
-        " Commands run in the repository root: use relative paths and plain `git ...`. Search"
-        " and read files with the Grep, Glob and Read tools; grep, find and sed are unavailable."
+        " Commands run in the repository root: use relative paths and plain `git ...`, and"
+        " run each tool directly rather than through a shell, env or another wrapper. Prefer"
+        " the Grep, Glob and Read tools for searching and reading files."
     )
     workers = config.review.test_workers
-    if workers != "off":
+    if workers == "auto":
         text += (
-            f" When the project has pytest-xdist, run the full test suite with `-n {workers}`"
-            " (focused runs of a few tests need no -n); without pytest-xdist run it serially."
+            " Run full test suites in parallel on all available CPUs when the project's test"
+            " runner supports it (for example pytest-xdist `-n auto`, `make -j`, `ctest -j`)."
+        )
+    elif workers != "off":
+        text += (
+            f" Run full test suites with {workers} parallel workers when the project's test"
+            f" runner supports it (for example pytest-xdist `-n {workers}`, `ctest -j {workers}`)."
         )
     return text
 
@@ -436,7 +442,7 @@ async def execute(
                         paths,
                         config,
                         store,
-                        "Fix only these accepted findings with minimal relevant changes. Run relevant tests and inspect the diff. Do not stage, commit or push in this turn. Stop on failed tests. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled. Use one literal shell command per call; Python only via python -m pytest (use .venv/bin/python -m pytest when the repository has that environment). Return exact test commands/results, tests_passed and a concise summary."
+                        "Fix only these accepted findings with minimal relevant changes. Then verify the change the way this project verifies changes: find out from its CI configuration, build files and contributor documentation which checks it runs (tests, type checking, linting, formatting, builds) and run the ones that apply, using the project's own local environment and tools. Fix what they report in the code you changed, and inspect the diff. Do not stage, commit or push in this turn. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled, so run checks offline. Use one literal shell command per call. Return every check command with its result under tests, tests_passed true only if every check you ran passed, and a concise summary."
                         + command_guidance(config)
                         + "\n\n"
                         + json.dumps([d.model_dump() for d in accepted]),
@@ -467,7 +473,7 @@ async def execute(
                     tests=fixes.tests,
                 )
                 if not fixes.tests_passed:
-                    raise LXError(Category.PROTOCOL, "Tests did not pass; publication refused")
+                    raise LXError(Category.PROTOCOL, "Checks did not pass; publication refused")
                 if (store.directory / "cancel").exists():
                     store.finish("CANCELLED")
                     return

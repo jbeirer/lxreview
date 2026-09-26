@@ -40,6 +40,49 @@ ATTRIBUTION = re.compile(
     re.IGNORECASE,
 )
 
+# Commands that run another command out of the guard's sight, or change privileges.
+INDIRECT = {
+    "sudo",
+    "su",
+    "doas",
+    "pkexec",
+    "env",
+    "nohup",
+    "setsid",
+    "timeout",
+    "nice",
+    "ionice",
+    "stdbuf",
+    "time",
+    "xargs",
+    "exec",
+    "command",
+    "builtin",
+    "eval",
+    "source",
+    ".",
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "csh",
+    "tcsh",
+    "script",
+    "watch",
+    "strace",
+    "ltrace",
+    "gdb",
+    "chroot",
+    "unshare",
+    "nsenter",
+    "systemd-run",
+    "at",
+    "batch",
+    "crontab",
+}
+
 PROTECTED = {
     ".git",
     ".ssh",
@@ -147,6 +190,9 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
     if any(x in command.lower() for x in ("--no-verify", "--force", "--hard", "core.hookspath")):
         return False, "Destructive git operations and hook bypass are blocked"
     exe = args[0]
+    if Path(exe).name == "git":
+        # /usr/bin/git and friends get the same Git rules as plain git.
+        exe = args[0] = "git"
     # `git -C <repo>` is plain git in the repository; any other directory stays refused.
     if (
         exe == "git"
@@ -155,15 +201,12 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
         and Path(args[2]).expanduser().resolve() == repo.resolve()
     ):
         args = [exe, *args[3:]]
-    if exe in (
-        ".venv/bin/python",
-        ".venv/bin/python3",
-        str(repo / ".venv/bin/python"),
-        str(repo / ".venv/bin/python3"),
-    ):
-        exe = "python"
-    if exe not in ("git", "pytest", "python", "python3", "rg", "ls", "cat"):
-        return False, "Command is outside the worker allowlist"
+    # Any project tooling may run (tests, type checkers, linters, builds): it executes
+    # repository code no more than a test suite does, and the sandbox confines it (no
+    # network, writes only inside the repository, .git and secrets protected). Refused are
+    # privilege changes and wrappers that would run a command this guard never sees.
+    if Path(exe).name in INDIRECT:
+        return False, "Run the command directly, without a shell, wrapper or privilege change"
     if phase == "publish" and exe != "git":
         return False, "Publication permits only Git commands"
     if exe == "git":
@@ -208,14 +251,11 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
             x.startswith(("--output", "--ext-diff", "--textconv", "--exec")) for x in args[2:]
         ):
             return False, "External git execution/output options are blocked"
-    if exe in ("python", "python3"):
-        if args[1:3] != ["-m", "pytest"]:
-            return False, "Python is allowed only as python -m pytest"
     # Compare whole path components (also inside rev:path and --opt=path) so that
     # .gitignore, .github/ or test_credentials.py are not mistaken for .git or secrets.
     if ".." in args or any(
         part in PROTECTED or part.startswith(".env")
-        for arg in args[1:]
+        for arg in args
         for part in re.split(r"[/:=]", arg)
     ):
         return False, "Protected paths and parent directory access are blocked"

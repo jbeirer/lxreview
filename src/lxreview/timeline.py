@@ -121,7 +121,7 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
     elif kind == "evaluation_complete":
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
     elif kind == "tests_reported":
-        texts = [f"Tests {'PASS' if event.get('passed') else 'FAIL'}"]
+        texts = [f"Checks {'PASS' if event.get('passed') else 'FAIL'}"]
         texts += [f"  {shorten(test, limit)}" for test in event.get("tests", [])]
     elif kind == "fixes_pushed":
         texts = [f"Commit {str(event.get('commit', ''))[:10]} pushed"]
@@ -156,8 +156,8 @@ def style(text: str) -> str:
         ("$ ", "bright_black"),
         ("Editing ", "magenta"),
         ("Failed: ", "red"),
-        ("Tests PASS", "bold green"),
-        ("Tests FAIL", "bold red"),
+        ("Checks PASS", "bold green"),
+        ("Checks FAIL", "bold red"),
         ("  ", "dim"),
         ("Commit ", "bold green"),
         ("Finished: CLEAN", "bold green"),
