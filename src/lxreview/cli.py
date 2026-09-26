@@ -280,15 +280,69 @@ def restart():
     start()
 
 
+@app.command(name="options")
+def choice_options(json_output: bool = typer.Option(False, "--json")):
+    """The models and effort levels a run can use, and the configured ones."""
+    from .backend import browser
+    from .config import WORKER_EFFORTS, WORKER_MODELS
+
+    paths, config = context()
+    cache = paths.root / "state/reviewer-options.json"
+    reviewer: dict = {}
+    try:
+        # A run's review owns the browser tab; never navigate it away mid-review.
+        with lock(paths.root / "state/reviewer.lock"):
+            reviewer = {**asyncio.run(browser(paths, config).options()), "live": True}
+        write_json(cache, reviewer)
+    except LXError as exc:
+        if cache.exists():
+            reviewer = {**json.loads(cache.read_text()), "live": False}
+        reviewer["unavailable"] = str(exc)
+    output(
+        {
+            "reviewer": {
+                **reviewer,
+                "configured": {
+                    "model": config.reviewer.model,
+                    "reasoning_effort": config.reviewer.reasoning_effort,
+                },
+            },
+            "worker": {
+                "models": list(WORKER_MODELS),
+                "efforts": list(WORKER_EFFORTS),
+                "configured": {"model": config.worker.model, "effort": config.worker.effort},
+            },
+        },
+        json_output,
+    )
+
+
 @app.command(name="run")
 def start_run(
-    target: str, repo: Path = typer.Option(Path.cwd(), "--repo"), max_passes: int | None = None
+    target: str,
+    repo: Path = typer.Option(Path.cwd(), "--repo"),
+    max_passes: int | None = None,
+    reviewer_model: str = typer.Option("", help="ChatGPT model for this run (see options)."),
+    reviewer_effort: str = typer.Option("", help="ChatGPT reasoning level for this run."),
+    worker_model: str = typer.Option("", help="Claude model for this run."),
+    worker_effort: str = typer.Option("", help="Claude effort for this run."),
 ):
     """Start a detached autonomous Claude review/fix worker."""
     from .contracts import ReviewRequest
     from .git import Repository
 
     paths, config = context()
+    choices = {
+        key: value
+        for key, value in (
+            ("reviewer_model", reviewer_model),
+            ("reviewer_effort", reviewer_effort),
+            ("worker_model", worker_model),
+            ("worker_effort", worker_effort),
+        )
+        if value
+    }
+    config.with_choices(choices)
     with lock(paths.root / "state/setup.lock"):
         repository = Repository(repo, paths)
         ReviewRequest(target=target, head_sha=repository.head())
@@ -308,6 +362,8 @@ def start_run(
                         f"Repository already has run {old['id']}; inspect/stop it first",
                     )
             store = RunStore.create(paths, repo, target, identity, maximum, repository.audit_root())
+            if choices:
+                store.update(choices=choices)
             try:
                 Supervisor(paths, config).start(
                     "run-" + store.id,

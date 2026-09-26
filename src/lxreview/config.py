@@ -74,6 +74,18 @@ class RuntimeConfig(Strict):
     supervisor: Literal["systemd", "tmux-scope", "launchd"] = "systemd"
 
 
+# Per-run choices (`lxreview run --reviewer-model ...`) and the settings they override.
+CHOICES = {
+    "reviewer_model": ("reviewer", "model"),
+    "reviewer_effort": ("reviewer", "reasoning_effort"),
+    "worker_model": ("worker", "model"),
+    "worker_effort": ("worker", "effort"),
+}
+# Claude Code's model aliases and effort levels (claude --help); full names also work.
+WORKER_MODELS = ("opus", "sonnet", "haiku", "fable")
+WORKER_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
 class Config(Strict):
     schema_version: Literal[1] = 1
     mode: Literal["lxplus-browser", "local-browser"] = "lxplus-browser"
@@ -84,6 +96,19 @@ class Config(Strict):
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+
+    def with_choices(self, choices: dict) -> "Config":
+        """This configuration with a run's own model and effort choices, validated."""
+        chosen = self.model_copy(deep=True)
+        try:
+            for key, value in choices.items():
+                section, field = CHOICES[key]
+                setattr(getattr(chosen, section), field, value)
+        except (KeyError, ValidationError) as exc:
+            raise LXError(
+                Category.CONFIG, f"Invalid model or effort choice: {key}={value!r}"
+            ) from exc
+        return chosen
 
     @classmethod
     def load(cls, paths: Paths) -> "Config":

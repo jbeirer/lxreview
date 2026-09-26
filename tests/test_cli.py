@@ -325,3 +325,32 @@ def test_login_stops_waiting_when_the_browser_service_died(paths, monkeypatch):
     result = run_login(paths, monkeypatch, misses=0, stalls=50, running=False)
     assert result.exit_code == 1
     assert "browser service stopped during startup" in str(result.exception)
+
+
+def test_options_are_read_live_and_fall_back_to_the_last_check_while_busy(paths, monkeypatch):
+    import lxreview.backend as backend
+    from lxreview.config import Config
+    from lxreview.paths import lock
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    Config().save(paths)
+
+    class Browser:
+        async def options(self):
+            return {
+                "models": ["GPT-5.5"],
+                "model": "GPT-5.5",
+                "reasoning": ["high"],
+                "reasoning_effort": "high",
+            }
+
+    monkeypatch.setattr(backend, "browser", lambda paths, config: Browser())
+    live = json.loads(runner.invoke(app, ["options", "--json"]).stdout)
+    assert live["reviewer"]["live"] is True and live["reviewer"]["models"] == ["GPT-5.5"]
+    assert live["reviewer"]["configured"] == {"model": "default", "reasoning_effort": "default"}
+    assert "xhigh" in live["worker"]["efforts"] and "opus" in live["worker"]["models"]
+    # A run's review owns the browser: report the last check instead of navigating away.
+    with lock(paths.root / "state/reviewer.lock"):
+        busy = json.loads(runner.invoke(app, ["options", "--json"]).stdout)
+    assert busy["reviewer"]["live"] is False and busy["reviewer"]["models"] == ["GPT-5.5"]
+    assert "unavailable" in busy["reviewer"]

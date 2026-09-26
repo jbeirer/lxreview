@@ -20,6 +20,7 @@ OPERATIONS = {
     "new_conversation",
     "ensure_ready",
     "configure",
+    "options",
     "query",
     "health",
     "sessions",
@@ -49,6 +50,8 @@ def application(
                 if op == "query"
                 else {"model", "reasoning_effort"}
                 if op == "configure"
+                else {"timeout"}
+                if op == "options"
                 else set()
             ):
                 raise ValueError("Invalid arguments")
@@ -189,6 +192,9 @@ class RelaySession:
 
     async def configure(self, model: str, reasoning_effort: str) -> dict:
         return await self.call("configure", model=model, reasoning_effort=reasoning_effort)
+
+    async def options(self) -> dict:
+        return await self.call("options", timeout=60)
 
     async def health(self) -> Health:
         return Health.model_validate(await self.call("health"))

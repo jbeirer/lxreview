@@ -197,3 +197,15 @@ async def test_a_slider_that_does_not_move_refuses_the_review(chatgpt):
     session = await chatgpt("frozen-slider")
     with pytest.raises(LXError, match="did not move"):
         await session.configure("default", "instant")
+
+
+async def test_options_lists_models_and_levels_without_changing_them(chatgpt):
+    session = await chatgpt()
+    assert await session.options() == {
+        "models": ["GPT-5.6 Sol", "GPT-5.5"],
+        "model": "GPT-5.6 Sol",
+        "reasoning": ["instant", "medium", "high"],
+        "reasoning_effort": "medium",
+    }
+    assert await picked(session) == "medium"
+    assert (await session.state())["user_messages"] == 0

@@ -299,6 +299,53 @@ class PlaywrightSession:
             chosen["chatgpt_reasoning"] = current
         return chosen
 
+    async def options(self) -> dict:
+        """The models and reasoning levels ChatGPT offers, and the current ones.
+
+        The slider shows only its current level's name, so this steps through the levels
+        and puts it back where it was. Nothing is selected and nothing is typed.
+        """
+        await self.new_conversation()
+        await self.ensure_ready()
+        page = await self._page()
+        picker = await self._open_view(
+            page, page.locator(SELECTORS["picker"]).locator("visible=true").first, "simple"
+        )
+        slider = page.locator(SELECTORS["effort_slider"]).first
+        await slider.focus()
+        level = start = await self._effort(page, slider)
+        levels = {level[1]: level[0]}
+        for key in ("ArrowLeft", "ArrowRight"):
+            while 1 < level[1] if key == "ArrowLeft" else level[1] < level[2]:
+                moved = await self._step(page, slider, key, level)
+                if moved == level:
+                    break
+                level = moved
+                levels[level[1]] = level[0]
+        while level[1] != start[1]:
+            moved = await self._step(
+                page, slider, "ArrowLeft" if level[1] > start[1] else "ArrowRight", level
+            )
+            if moved == level:
+                raise LXError(Category.PROTOCOL, "ChatGPT's reasoning level could not be restored")
+            level = moved
+        await self._close_picker(page)
+        picker = await self._open_view(page, picker, "advanced")
+        options = page.locator(SELECTORS["picker_menu"]).locator(SELECTORS["model_option"])
+        models, current = [], ""
+        for i in range(await options.count()):
+            name = (await options.nth(i).locator("span").first.inner_text()).strip()
+            models.append(name)
+            if await options.nth(i).get_attribute("aria-checked") == "true":
+                current = name
+        await self._close_picker(page)
+        return {
+            "models": models,
+            "model": current,
+            "reasoning": [levels[i].lower() for i in sorted(levels)],
+            "reasoning_effort": start[0].lower(),
+        }
+
     async def _open_view(self, page: Any, picker: Any, view: str) -> Any:
         """Open the picker on the slider ("simple") or the model list ("advanced")."""
         await self._open_picker(page, picker)

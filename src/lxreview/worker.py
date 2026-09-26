@@ -331,6 +331,8 @@ async def execute(
     paths: Paths, config: Config, store: RunStore, backend: ReviewerBackend, turn=claude_turn
 ) -> None:
     state = store.load()
+    # The run's own model and effort choices, fixed when it was started (resume keeps them).
+    config = config.with_choices(state.get("choices", {}))
     repo = Repository(Path(state["repo"]), paths)
     try:
         with (

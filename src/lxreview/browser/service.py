@@ -28,6 +28,7 @@ DEADLINES = {
     "new_conversation": 45,
     "ensure_ready": 30,
     "configure": 60,
+    "options": 90,
     "recover": 60,
     "query": 30,
 }
@@ -132,6 +133,9 @@ class ServiceSession:
 
     async def configure(self, model: str, reasoning_effort: str) -> dict:
         return await self.call("configure", model=model, reasoning_effort=reasoning_effort)
+
+    async def options(self) -> dict:
+        return await self.call("options")
 
     async def health(self) -> Health:
         return Health.model_validate(await self.call("health"))

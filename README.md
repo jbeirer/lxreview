@@ -15,7 +15,7 @@ In a new Claude Code conversation:
 /review-loop https://github.com/owner/repository/pull/123
 ```
 
-Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
+Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). Before starting, it shows the ChatGPT models and reasoning levels your account offers and Claude's models and effort levels, with the current choice first, and starts the run with your picks. The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
 
 The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. It never modifies shell startup files or PATH. Use the absolute executable path (shown above); `lxreview` below abbreviates that path. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
 
@@ -98,7 +98,7 @@ model = "opus"                       # a Claude Code model alias or full name; "
 effort = "xhigh"                     # low, medium, high, xhigh, max or default
 ```
 
-Before each review, LXReview selects the configured model and reasoning level in the fresh Temporary Chat and reads both back; a model or level ChatGPT does not offer, or one that does not stick, stops the run before anything is sent, with the choices that are available. ChatGPT keeps the selection as your account default. Each pass's `reviewer.json` and the timeline record the model and level that answered.
+`lxreview options` lists what can be chosen (ChatGPT's list is read live from its model picker, or from the last check while a review is using the browser). A single run can override the configuration with `lxreview run <PR> --reviewer-model … --reviewer-effort … --worker-model … --worker-effort …`; `resume` keeps a run's choices. Before each review, LXReview selects the chosen model and reasoning level in the fresh Temporary Chat and reads both back; a model or level ChatGPT does not offer, or one that does not stick, stops the run before anything is sent, with the choices that are available. ChatGPT keeps the selection as your account default. Each pass's `reviewer.json` and the timeline record the model and level that answered.
 
 The setup command runs once per worker, outside the sandbox, and its exported variables are kept for every check (for a CVMFS stack, a conda environment or `module load`). It must not source files from the repository, which the worker may change. CVMFS repositories that the setup or `path` mention, or that are already mounted, stay mounted while the worker runs. Caches are private to each turn. Files outside the repository are readable to checks except credentials and private data (SSH, cloud and registry credentials, `~/.config`, browser and Claude data, shell histories, `.env` files); nothing outside the repository is writable. While a sandboxed command runs, the sandbox puts empty read-only placeholders at paths such as `.bashrc`, `.mcp.json` or `.claude/settings.json` so the command cannot create them; they disappear when the command ends, and LXReview keeps them out of `git status` for the duration of a run.
 
@@ -106,7 +106,7 @@ State and redacted events live under `~/.lxreview/state/runs/<id>`. Verbatim rev
 
 ## Operations
 
-`start`, `status`, `stop`, `restart`; `desktop start|stop|status|connect`; `bridge status|stop`; `doctor --json` and `doctor --no-smoke`; `version`; `update`; `cleanup`.
+`start`, `status`, `stop`, `restart`; `options`; `desktop start|stop|status|connect`; `bridge status|stop`; `doctor --json` and `doctor --no-smoke`; `version`; `update`; `cleanup`.
 
 `doctor` performs a real assistant-turn smoke test by default. `--no-smoke` avoids consuming a ChatGPT turn. It never treats a GPU warning alone as browser failure. New MCP registration may require a new Claude conversation. `setup --skip-runtime --skip-integration` is intended for development, not a ready-to-use install.
 

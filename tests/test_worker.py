@@ -335,3 +335,37 @@ def test_edit_turn_names_the_test_worker_count(workers, expected):
     text = command_guidance(config)
     assert "Grep, Glob and Read tools" in text
     assert (expected in text) if expected else "-n" not in text
+
+
+def test_run_choices_are_validated():
+    from lxreview.errors import LXError
+
+    config = Config().with_choices({"reviewer_effort": "high", "worker_model": "opus"})
+    assert config.reviewer.reasoning_effort == "high" and config.worker.model == "opus"
+    for bad in ({"worker_effort": "extreme"}, {"reviewer_model": "x; y"}, {"unknown": "x"}):
+        with pytest.raises(LXError):
+            Config().with_choices(bad)
+
+
+async def test_run_choices_reach_the_reviewer_and_claude(paths, tmp_path, monkeypatch):
+    monkeypatch.setattr("lxreview.worker.Repository", Repo)
+    Repo.head_value = "a" * 40
+    store = create(paths, tmp_path)
+    store.update(
+        choices={"reviewer_model": "GPT-5.5", "reviewer_effort": "high", "worker_effort": "max"}
+    )
+    efforts = []
+
+    async def turn(paths, config, store, prompt, schema, read_only):
+        efforts.append(config.worker.effort)
+        return Evaluation(
+            findings=[Decision(finding="S1", decision="REJECTED", reason="no", evidence="f:1")]
+        )
+
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    await execute(paths, Config(), store, reviewer, turn)
+    assert (reviewer.requests[0].model, reviewer.requests[0].reasoning_effort) == (
+        "GPT-5.5",
+        "high",
+    )
+    assert efforts == ["max"]
