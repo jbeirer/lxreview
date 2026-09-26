@@ -26,8 +26,11 @@ class WebReviewer:
             async with asyncio.timeout(request.timeout):
                 await self.browser.new_conversation()
                 await self.browser.ensure_ready()
+                # Model and reasoning level are set in the fresh chat and read back before
+                # the prompt goes out; the audit records what actually answered.
+                chosen = await self.browser.configure(request.model, request.reasoning_effort)
                 raw = await self.browser.query(prompt_for(request), request.timeout)
-                return parse_response(raw, **self.metadata)
+                return parse_response(raw, **self.metadata, **chosen)
         except TimeoutError as exc:
             raise LXError(
                 Category.TIMEOUT, "Review deadline exhausted; submission was not retried"

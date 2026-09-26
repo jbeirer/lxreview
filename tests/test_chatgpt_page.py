@@ -143,3 +143,57 @@ async def test_health_after_a_fresh_start_checks_chatgpt_itself(chatgpt):
     assert health.metadata["session_expires"] == pytest.approx(expires, abs=1)
     assert "(30 days)" in health.detail
     assert "not-read" not in health.detail
+
+
+async def picked(session):
+    page = await session._page()
+    return await page.get_attribute(
+        'button[aria-label="Select ChatGPT model"]', "data-selected-reasoning-effort"
+    )
+
+
+async def test_model_and_reasoning_are_chosen_and_read_back(chatgpt):
+    session = await chatgpt()
+    assert await session.configure("GPT-5.5", "high") == {
+        "chatgpt_model": "GPT-5.5",
+        "chatgpt_reasoning": "high",
+    }
+    assert await picked(session) == "high"
+    assert await session.configure("default", "instant") == {"chatgpt_reasoning": "instant"}
+    assert await picked(session) == "none"
+    # The picker is closed again: the review goes out normally.
+    assert await session.query("Reply exactly OK", 30) == "OK"
+
+
+async def test_default_choices_leave_the_picker_closed(chatgpt):
+    session = await chatgpt()
+    assert await session.configure("default", "default") == {"chatgpt_reasoning": "medium"}
+    page = await session._page()
+    assert (
+        await page.get_attribute('button[aria-label="Select ChatGPT model"]', "aria-expanded")
+        == "false"
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "effort", "message"),
+    [
+        ("GPT-9", "default", "available: GPT-5.6 Sol, GPT-5.5"),
+        ("default", "heavy", "available: instant, medium, high"),
+    ],
+)
+async def test_unavailable_choices_refuse_the_review_and_keep_the_level(
+    chatgpt, model, effort, message
+):
+    session = await chatgpt()
+    with pytest.raises(LXError, match=message) as caught:
+        await session.configure(model, effort)
+    assert caught.value.category == Category.CONFIG
+    assert await picked(session) == "medium"
+    assert (await session.state())["user_messages"] == 0
+
+
+async def test_a_slider_that_does_not_move_refuses_the_review(chatgpt):
+    session = await chatgpt("frozen-slider")
+    with pytest.raises(LXError, match="did not move"):
+        await session.configure("default", "instant")

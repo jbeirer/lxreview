@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   A stand-in for chatgpt.com that reproduces only the markup LXReview relies on, as
-  observed on 2026-09-26. Scenarios: ?scenario=logged-out|captcha|error|multi|mangle|stuck
+  observed on 2026-09-26. Scenarios: ?scenario=logged-out|captcha|error|multi|mangle|stuck|frozen-slider
 -->
 <html>
 <head>
@@ -25,7 +25,7 @@
     <form data-chatgpt-composer onsubmit="return false">
       <button type="button" aria-label="Add files and more">+</button>
       <div class="ProseMirror" contenteditable="true" aria-label="Ask ChatGPT" id="composer"></div>
-      <button type="button" aria-label="Select ChatGPT model">Medium</button>
+      <button type="button" aria-label="Select ChatGPT model" id="picker" aria-haspopup="menu" aria-expanded="false" data-selected-reasoning-effort="medium">Thinking effort</button>
       <button type="button" aria-label="Send" id="send" disabled>Send</button>
     </form>
   </main>
@@ -67,6 +67,75 @@
       }
       send.disabled = scenario === 'stuck' || !text.trim();
     });
+
+    // The model picker: a reasoning slider ("Power", arrow keys, status "Medium, 2 of 3.")
+    // and, behind the "Select model" toggle, the models as menu radio items.
+    const picker = document.getElementById('picker');
+    const levels = [['Instant', 'none'], ['Medium', 'medium'], ['High', 'high']];
+    const models = [['GPT-5.6 Sol', ''], ['GPT-5.5', 'Leaving on October 14']];
+    // The level and model are account settings and survive a reload; the view the
+    // picker opens on is remembered only within one page.
+    let level = Number(sessionStorage.getItem('level') ?? 1);
+    let model = Number(sessionStorage.getItem('model') ?? 0);
+    let view = 'simple', menu = null;
+    const save = () => { sessionStorage.setItem('level', level); sessionStorage.setItem('model', model); };
+    const closeMenu = () => {
+      if (menu) menu.remove();
+      menu = null;
+      picker.setAttribute('aria-expanded', 'false');
+    };
+    picker.setAttribute('data-selected-reasoning-effort', levels[level][1]);
+    const openMenu = () => {
+      menu = document.createElement('div');
+      menu.setAttribute('data-radix-popper-content-wrapper', '');
+      menu.innerHTML =
+        '<div role="menu" data-state="open">' +
+        '<div data-model-picker-view="' + view + '"><div data-view="simple">' +
+        '<div role="menuitem" aria-label="Select model" data-model-picker-view-toggle="true" tabindex="0"><span></span> &rsaquo;</div>' +
+        '<span id="effort-status" role="status" aria-live="polite"></span>' +
+        '<span id="effort-help">Use Left and Right arrow keys to adjust power</span>' +
+        '<div role="menuitem" aria-label="Power" data-reasoning-slider="true" tabindex="-1" aria-describedby="effort-status effort-help" aria-keyshortcuts="ArrowLeft ArrowRight">' +
+        '<span role="slider" aria-valuemin="0" aria-valuemax="2" aria-hidden="true"></span></div></div>' +
+        '<div data-view="advanced"></div></div></div>';
+      document.body.append(menu);
+      const advanced = menu.querySelector('[data-view=advanced]');
+      const simple = menu.querySelector('[data-view=simple]');
+      const show = () => {
+        menu.querySelector('[data-model-picker-view]').setAttribute('data-model-picker-view', view);
+        simple.hidden = view !== 'simple';
+        advanced.hidden = view !== 'advanced';
+      };
+      models.forEach(([name, note], i) => {
+        const item = document.createElement('div');
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', String(i === model));
+        item.innerHTML = '<div><span>' + name + '</span>' + (note ? '<span>' + note + '</span>' : '') + '</div>';
+        item.style.display = 'block';
+        item.addEventListener('click', () => { model = i; save(); closeMenu(); });
+        advanced.append(item);
+      });
+      const render = () => {
+        menu.querySelector('[data-model-picker-view-toggle] span').textContent = levels[level][0];
+        menu.querySelector('#effort-status').textContent = levels[level][0] + ', ' + (level + 1) + ' of 3.';
+        menu.querySelector('[role=slider]').setAttribute('aria-valuenow', String(level));
+        picker.setAttribute('data-selected-reasoning-effort', levels[level][1]);
+      };
+      render();
+      show();
+      menu.querySelector('[data-model-picker-view-toggle]').addEventListener('click', () => {
+        view = 'advanced';
+        show();
+      });
+      menu.querySelector('[data-reasoning-slider]').addEventListener('keydown', (event) => {
+        if (scenario === 'frozen-slider') return;
+        // ChatGPT updates the status a moment after the key press.
+        const move = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+        if (move) setTimeout(() => { level = Math.min(2, Math.max(0, level + move)); save(); if (menu) render(); }, 150);
+      });
+      picker.setAttribute('aria-expanded', 'true');
+    };
+    picker.addEventListener('click', () => (menu ? closeMenu() : openMenu()));
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMenu(); });
 
     composer.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || event.shiftKey) return;

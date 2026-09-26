@@ -111,7 +111,12 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
             if "substantial" in event
             else ""
         )
-        texts = [f"Reviewer pass {n} complete, {event.get('verdict')}{counts}"]
+        used = ", ".join(str(event[k]) for k in ("model", "reasoning") if event.get(k))
+        texts = [
+            f"Reviewer pass {n} complete"
+            + (f" ({used})" if used else "")
+            + f", {event.get('verdict')}{counts}"
+        ]
     elif kind == "finding_evaluated":
         texts = [
             f"{event.get('decision', '?'):<9} {event.get('finding')} {shorten(event.get('title', ''), limit)}"

@@ -19,6 +19,7 @@ from ..reviewer import WebReviewer
 OPERATIONS = {
     "new_conversation",
     "ensure_ready",
+    "configure",
     "query",
     "health",
     "sessions",
@@ -46,6 +47,8 @@ def application(
                 if op == "review"
                 else {"prompt", "timeout"}
                 if op == "query"
+                else {"model", "reasoning_effort"}
+                if op == "configure"
                 else set()
             ):
                 raise ValueError("Invalid arguments")
@@ -63,6 +66,11 @@ def application(
                     ):
                         raise ValueError("Invalid query")
                     result = await session.query(prompt, timeout)
+                elif op == "configure":
+                    choice = ReviewRequest.model_validate(
+                        {"target": "https://github.com/o/r/pull/1", "head_sha": "0" * 40, **data}
+                    )
+                    result = await session.configure(choice.model, choice.reasoning_effort)
                 else:
                     result = await getattr(session, op)()
             payload = (
@@ -178,6 +186,9 @@ class RelaySession:
 
     async def query(self, prompt: str, timeout: float) -> str:
         return await self.call("query", prompt=prompt, timeout=timeout)
+
+    async def configure(self, model: str, reasoning_effort: str) -> dict:
+        return await self.call("configure", model=model, reasoning_effort=reasoning_effort)
 
     async def health(self) -> Health:
         return Health.model_validate(await self.call("health"))

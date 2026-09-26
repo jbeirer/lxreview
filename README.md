@@ -86,6 +86,20 @@ test_workers = "auto"                # parallel full test runs: "auto" (all CPUs
 "/home/me/analysis" = "source /cvmfs/sw.hsf.org/key4hep/setup.sh -r 2026-04-08"
 ```
 
+Both reviewers can be told which model and how much reasoning to use:
+
+```toml
+[reviewer]                           # the independent ChatGPT review
+model = "GPT-5.6 Sol"                # as ChatGPT's model picker names it; "default" keeps ChatGPT's choice
+reasoning_effort = "high"            # a level the picker offers on your plan, such as instant, medium or high
+
+[worker]                             # Claude's evaluation, fix and commit turns
+model = "opus"                       # a Claude Code model alias or full name; "default" uses Claude Code's
+effort = "xhigh"                     # low, medium, high, xhigh, max or default
+```
+
+Before each review, LXReview selects the configured model and reasoning level in the fresh Temporary Chat and reads both back; a model or level ChatGPT does not offer, or one that does not stick, stops the run before anything is sent, with the choices that are available. ChatGPT keeps the selection as your account default. Each pass's `reviewer.json` and the timeline record the model and level that answered.
+
 The setup command runs once per worker, outside the sandbox, and its exported variables are kept for every check (for a CVMFS stack, a conda environment or `module load`). It must not source files from the repository, which the worker may change. CVMFS repositories that the setup or `path` mention, or that are already mounted, stay mounted while the worker runs. Caches are private to each turn. Files outside the repository are readable to checks except credentials and private data (SSH, cloud and registry credentials, `~/.config`, browser and Claude data, shell histories, `.env` files); nothing outside the repository is writable. While a sandboxed command runs, the sandbox puts empty read-only placeholders at paths such as `.bashrc`, `.mcp.json` or `.claude/settings.json` so the command cannot create them; they disappear when the command ends, and LXReview keeps them out of `git status` for the duration of a run.
 
 State and redacted events live under `~/.lxreview/state/runs/<id>`. Verbatim reviews, explicit evaluations, diffs, test reports and metadata live under the repository's Git common directory, `review-loop/<id>`. Worktrees are supported. Hidden model reasoning is excluded from events. Resume requires a clean, pushed checkpoint; interrupted pass artifacts are retained.

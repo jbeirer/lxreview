@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -155,3 +156,26 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':result}),
     schema = PublishResult if publish else EditResult
     result = await claude_turn(paths, config, store, "work", schema, read_only=False)
     assert isinstance(result, schema)
+
+
+async def test_worker_model_and_effort_reach_claude_only_when_set(paths, store, tmp_path):
+    executable = tmp_path / "model-claude"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + """import sys,json
+open(sys.argv[0] + '.argv', 'w').write(json.dumps(sys.argv))
+sys.stdin.read()
+print(json.dumps({'type':'result','is_error':False,'structured_output':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}}),flush=True)
+"""
+    )
+    executable.chmod(0o700)
+    config = Config()
+    config.runtime.claude = str(executable)
+    await claude_turn(paths, config, store, "evaluate", Evaluation, read_only=True)
+    argv = json.loads(Path(str(executable) + ".argv").read_text())
+    assert "--model" not in argv and "--effort" not in argv
+    config.worker.model, config.worker.effort = "opus", "xhigh"
+    await claude_turn(paths, config, store, "evaluate", Evaluation, read_only=True)
+    argv = json.loads(Path(str(executable) + ".argv").read_text())
+    assert argv[argv.index("--model") + 1] == "opus"
+    assert argv[argv.index("--effort") + 1] == "xhigh"

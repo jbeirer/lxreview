@@ -24,7 +24,13 @@ from .playwright import PlaywrightSession
 
 NOT_RUNNING = "Browser service is not running; run lxreview start"
 # Seconds a client waits beyond the operation's own deadline.
-DEADLINES = {"new_conversation": 45, "ensure_ready": 30, "recover": 60, "query": 30}
+DEADLINES = {
+    "new_conversation": 45,
+    "ensure_ready": 30,
+    "configure": 60,
+    "recover": 60,
+    "query": 30,
+}
 
 
 def directory(paths: Paths) -> Path:
@@ -123,6 +129,9 @@ class ServiceSession:
 
     async def query(self, prompt: str, timeout: float) -> str:
         return await self.call("query", prompt=prompt, timeout=timeout)
+
+    async def configure(self, model: str, reasoning_effort: str) -> dict:
+        return await self.call("configure", model=model, reasoning_effort=reasoning_effort)
 
     async def health(self) -> Health:
         return Health.model_validate(await self.call("health"))

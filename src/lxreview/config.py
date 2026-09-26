@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .contracts import EFFORT_NAME, MODEL_NAME
 from .errors import Category, LXError
 from .paths import Paths, atomic_write
 
@@ -19,8 +20,19 @@ class Strict(BaseModel):
 class ReviewerConfig(Strict):
     backend: Literal["chatgpt-web"] = "chatgpt-web"
     provider: Literal["chatgpt"] = "chatgpt"
-    model: Literal["default"] = "default"
-    reasoning_effort: Literal["default"] = "default"
+    # As ChatGPT's model picker names them, for example "GPT-5.6 Sol" and "high"
+    # (the levels your plan offers, such as instant, medium, high); "default" keeps
+    # ChatGPT's current choice.
+    model: str = Field(default="default", pattern=MODEL_NAME)
+    reasoning_effort: str = Field(default="default", pattern=EFFORT_NAME)
+
+
+class WorkerConfig(Strict):
+    """The Claude model and effort for the evaluate, edit and commit turns."""
+
+    # A Claude Code model alias or full name ("opus", "sonnet", "claude-opus-5-5").
+    model: str = Field(default="default", pattern=r"^[\w.\[\]-]{1,60}$")
+    effort: Literal["default", "low", "medium", "high", "xhigh", "max"] = "default"
 
 
 class BrowserConfig(Strict):
@@ -69,6 +81,7 @@ class Config(Strict):
     reviewer: ReviewerConfig = Field(default_factory=ReviewerConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
+    worker: WorkerConfig = Field(default_factory=WorkerConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 

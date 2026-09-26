@@ -14,11 +14,19 @@ class Verdict(StrEnum):
     INVALID = "INVALID"
 
 
+# A reviewer model as the provider names it ("GPT-5.6 Sol"), and a reasoning level as its
+# picker names it ("high"); "default" leaves the provider's current choice untouched.
+MODEL_NAME = r"^[\w .+:()-]{1,60}$"
+EFFORT_NAME = r"^[a-z][a-z -]{0,30}$"
+
+
 class ReviewRequest(BaseModel):
     target: str
     head_sha: str
     rubric: str = "correctness, regressions, edge cases, unnecessary complexity, API consistency, test quality, maintainability"
     timeout: float = Field(default=600, ge=5, le=1800)
+    model: str = Field(default="default", pattern=MODEL_NAME)
+    reasoning_effort: str = Field(default="default", pattern=EFFORT_NAME)
 
     @field_validator("target")
     @classmethod
@@ -52,6 +60,7 @@ class Health(BaseModel):
 class BrowserSessionBackend(Protocol):
     async def new_conversation(self) -> None: ...
     async def ensure_ready(self) -> None: ...
+    async def configure(self, model: str, reasoning_effort: str) -> dict: ...
     async def query(self, prompt: str, timeout: float) -> str: ...
     async def health(self) -> Health: ...
     async def sessions(self) -> list[dict]: ...

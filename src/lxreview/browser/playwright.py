@@ -6,6 +6,7 @@ saved page fixtures without a ChatGPT account.
 """
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,13 @@ SELECTORS = {
     # ChatGPT renders a reply's action bar only once the reply is complete.
     "reply_actions": 'button[aria-label="Copy"], button[aria-label="Regenerate response"]',
     "account": 'button[aria-label="Open profile menu"]',
+    # Model picker next to the composer (observed 2026-09-26): a menu with a reasoning slider
+    # ("Power", arrow keys, status "Medium, 2 of 3.") and, behind a view toggle, the models.
+    "picker": 'button[aria-label="Select ChatGPT model"]',
+    "picker_menu": '[role="menu"]',
+    "effort_slider": "[data-reasoning-slider]",
+    "model_view": "[data-model-picker-view-toggle]",
+    "model_option": '[role="menuitemradio"]',
     "login": '[data-testid="login-button"], [data-testid="signup-button"], a[href*="/auth/login"], input[type="password"]',
     "captcha": 'iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile" i], iframe[src*="arkose" i], #challenge-form',
 }
@@ -192,6 +200,168 @@ class PlaywrightSession:
                     Category.AUTH, "ChatGPT composer did not appear; check the browser window"
                 )
             await asyncio.sleep(0.5)
+
+    async def configure(self, model: str, reasoning_effort: str) -> dict:
+        """Choose the model and reasoning level in the fresh chat, then read both back.
+
+        "default" leaves a choice untouched. A choice ChatGPT does not offer, or one that
+        does not stick, refuses the review before any prompt is typed.
+        """
+        page = await self._page()
+        picker = page.locator(SELECTORS["picker"]).locator("visible=true").first
+        chosen: dict = {}
+        value = None
+        # The level first: a fresh chat opens the picker on the slider, and within a chat
+        # the picker reopens on the view last used, while the model list has no way back.
+        if reasoning_effort != "default":
+            picker = await self._open_view(page, picker, "simple")
+            slider = page.locator(SELECTORS["effort_slider"]).first
+            await slider.focus()
+            level = await self._effort(page, slider)
+            start, levels = level, {level[1]: level[0]}
+            # Walk to the lowest level, then up until the wanted one appears.
+            while level[1] > 1:
+                moved = await self._step(page, slider, "ArrowLeft", level)
+                if moved == level:
+                    raise LXError(Category.PROTOCOL, "ChatGPT's reasoning slider did not move")
+                level = moved
+                levels[level[1]] = level[0]
+            while level[0].lower() != reasoning_effort.lower() and level[1] < level[2]:
+                moved = await self._step(page, slider, "ArrowRight", level)
+                if moved == level:
+                    break
+                level = moved
+                levels[level[1]] = level[0]
+            if level[0].lower() != reasoning_effort.lower():
+                # Leave the user's level as it was.
+                while level[1] > start[1]:
+                    moved = await self._step(page, slider, "ArrowLeft", level)
+                    if moved == level:
+                        break
+                    level = moved
+                await self._close_picker(page)
+                offered = ", ".join(levels[i].lower() for i in sorted(levels))
+                raise LXError(
+                    Category.CONFIG,
+                    f"ChatGPT offers no reasoning level {reasoning_effort!r} here; available: {offered}",
+                )
+            await self._close_picker(page)
+            # Read the level back from a freshly opened picker.
+            picker = await self._open_view(page, picker, "simple")
+            actual = await self._effort(page, page.locator(SELECTORS["effort_slider"]).first)
+            value = await picker.get_attribute("data-selected-reasoning-effort")
+            await self._close_picker(page)
+            if actual[0].lower() != reasoning_effort.lower():
+                raise LXError(Category.PROTOCOL, "ChatGPT did not keep the reasoning level")
+            chosen["chatgpt_reasoning"] = actual[0].lower()
+        if model != "default":
+            picker = await self._open_view(page, picker, "advanced")
+            options = page.locator(SELECTORS["picker_menu"]).locator(SELECTORS["model_option"])
+            # The name is the option's first span; a note such as "Leaving on October 14"
+            # follows in its own span (innerText joins them depending on layout).
+            names = [
+                (await options.nth(i).locator("span").first.inner_text()).strip()
+                for i in range(await options.count())
+            ]
+            wanted = [i for i, name in enumerate(names) if name.lower() == model.lower()]
+            if not wanted:
+                await self._close_picker(page)
+                raise LXError(
+                    Category.CONFIG,
+                    f"ChatGPT offers no model named {model!r} here; available: {', '.join(names)}",
+                )
+            option = options.nth(wanted[0])
+            if await option.get_attribute("aria-checked") != "true":
+                await option.click()
+            await self._close_picker(page)
+            picker = await self._open_view(page, picker, "advanced")
+            checked = page.locator(SELECTORS["picker_menu"]).locator(
+                f'{SELECTORS["model_option"]}[aria-checked="true"]'
+            )
+            actual_model = (
+                (await checked.first.locator("span").first.inner_text()).strip()
+                if await checked.count()
+                else ""
+            )
+            await self._close_picker(page)
+            if actual_model.lower() != model.lower():
+                raise LXError(
+                    Category.PROTOCOL, f"ChatGPT did not switch to {model}; review refused"
+                )
+            chosen["chatgpt_model"] = actual_model
+        current = await picker.get_attribute("data-selected-reasoning-effort")
+        if value is not None and current != value:
+            raise LXError(
+                Category.PROTOCOL,
+                "ChatGPT changed the reasoning level with the model; review refused",
+            )
+        if "chatgpt_reasoning" not in chosen and current:
+            chosen["chatgpt_reasoning"] = current
+        return chosen
+
+    async def _open_view(self, page: Any, picker: Any, view: str) -> Any:
+        """Open the picker on the slider ("simple") or the model list ("advanced")."""
+        await self._open_picker(page, picker)
+        views = page.locator(SELECTORS["picker_menu"]).locator("[data-model-picker-view]")
+        current = await views.first.get_attribute("data-model-picker-view")
+        if current == view:
+            return picker
+        if view == "advanced":
+            await page.locator(SELECTORS["model_view"]).first.click()
+            for _ in range(30):
+                if await views.first.get_attribute("data-model-picker-view") == "advanced":
+                    return picker
+                await page.wait_for_timeout(100)
+            raise LXError(Category.PROTOCOL, "ChatGPT's model list did not open")
+        # Only a fresh chat reopens the picker on the slider.
+        await self._close_picker(page)
+        await self.new_conversation()
+        await self.ensure_ready()
+        picker = page.locator(SELECTORS["picker"]).locator("visible=true").first
+        await self._open_picker(page, picker)
+        if await views.first.get_attribute("data-model-picker-view") != "simple":
+            await self._close_picker(page)
+            raise LXError(Category.PROTOCOL, "ChatGPT's reasoning slider is not reachable")
+        return picker
+
+    async def _open_picker(self, page: Any, picker: Any) -> None:
+        await picker.click()
+        await page.locator(SELECTORS["picker_menu"]).first.wait_for(state="visible", timeout=5000)
+
+    async def _close_picker(self, page: Any) -> None:
+        for _ in range(3):
+            if not await page.locator(SELECTORS["picker_menu"]).locator("visible=true").count():
+                return
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(200)
+        raise LXError(Category.PROTOCOL, "ChatGPT's model picker did not close")
+
+    async def _step(
+        self, page: Any, slider: Any, key: str, level: tuple[str, int, int]
+    ) -> tuple[str, int, int]:
+        """Move the slider one level; an unchanged status after a moment means the end."""
+        await page.keyboard.press(key)
+        for _ in range(15):
+            moved = await self._effort(page, slider)
+            if moved[1] != level[1]:
+                return moved
+            await page.wait_for_timeout(100)
+        return level
+
+    async def _effort(self, page: Any, slider: Any) -> tuple[str, int, int]:
+        """The reasoning level the slider shows, from its status line ("High, 3 of 3.")."""
+        described = (await slider.get_attribute("aria-describedby") or "").split()
+        for _ in range(20):
+            for identifier in described:
+                status = page.locator(f'[id="{identifier}"]')
+                if await status.count():
+                    match = re.fullmatch(
+                        r"(.+?), (\d+) of (\d+)\.?", (await status.first.inner_text()).strip()
+                    )
+                    if match:
+                        return match.group(1), int(match.group(2)), int(match.group(3))
+            await page.wait_for_timeout(100)
+        raise LXError(Category.PROTOCOL, "ChatGPT's reasoning level could not be read")
 
     async def query(self, prompt: str, timeout: float) -> str:
         end = time.monotonic() + timeout

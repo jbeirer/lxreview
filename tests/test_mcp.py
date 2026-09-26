@@ -47,6 +47,9 @@ class FakeChatGPT:
     async def ensure_ready(self):
         pass
 
+    async def configure(self, model, reasoning_effort):
+        return {}
+
     async def query(self, prompt, timeout):
         self.queries += 1
         return "Full review\nVERDICT: CLEAN"

@@ -120,6 +120,9 @@ async def test_entire_remote_review_excludes_local_control(paths):
         async def ensure_ready(self):
             events.append("ready")
 
+        async def configure(self, model, reasoning_effort):
+            return {}
+
         async def query(self, prompt, timeout):
             events.append("query")
             return "VERDICT: CLEAN"
@@ -265,3 +268,45 @@ async def test_tunnel_reconnect_budget_resets_after_healthy_connection(
     monkeypatch.setattr(ssh.time, "time", lambda: real_time() + (1e6 if len(starts) >= 20 else 0))
     await ssh.supervise_tunnel(start, real_time() + 3600)
     assert len(starts) == expected
+
+
+async def test_configure_operation_validates_its_choices(paths):
+    class Picker(Session):
+        chosen: list = []
+
+        async def configure(self, model, reasoning_effort):
+            self.chosen.append((model, reasoning_effort))
+            return {"chatgpt_model": model, "chatgpt_reasoning": reasoning_effort}
+
+    session = Picker()
+    runner = web.AppRunner(
+        application(session, "relay-secret", time.time() + 60, paths.root / "relay.lock", {})
+    )
+    await runner.setup()
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    await web.SockSite(runner, sock).start()
+    headers = {"Authorization": "Bearer relay-secret"}
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}", trust_env=False
+        ) as client:
+            ok = await client.post(
+                "/v1/configure",
+                json={"model": "GPT-5.5", "reasoning_effort": "high"},
+                headers=headers,
+            )
+            assert ok.json()["result"] == {"chatgpt_model": "GPT-5.5", "chatgpt_reasoning": "high"}
+            for bad in (
+                {"model": "x; rm -rf /", "reasoning_effort": "high"},
+                {"model": "GPT-5.5", "reasoning_effort": "HIGH!"},
+                {"model": "GPT-5.5", "reasoning_effort": "high", "extra": 1},
+            ):
+                response = await client.post("/v1/configure", json=bad, headers=headers)
+                assert response.status_code == 400
+            assert session.chosen == [("GPT-5.5", "high")]
+    finally:
+        await runner.cleanup()

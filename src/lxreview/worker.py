@@ -178,6 +178,10 @@ async def claude_turn(
         "--json-schema",
         json.dumps(schema.model_json_schema()),
     ]
+    if config.worker.model != "default":
+        argv += ["--model", config.worker.model]
+    if config.worker.effort != "default":
+        argv += ["--effort", config.worker.effort]
     session_file = store.directory / "claude-session-id"
     session_id = session_file.read_text().strip()
     if session_id:
@@ -354,6 +358,8 @@ async def execute(
                         target=state["target"],
                         head_sha=identity["head"],
                         timeout=config.review.timeout,
+                        model=config.reviewer.model,
+                        reasoning_effort=config.reviewer.reasoning_effort,
                     )
                 )
                 # Raw reviewer text is the audit source of truth; persist before any Claude turn.
@@ -363,6 +369,8 @@ async def execute(
                     "review_received",
                     pass_number=number,
                     verdict=response.verdict.value,
+                    model=response.metadata.get("chatgpt_model"),
+                    reasoning=response.metadata.get("chatgpt_reasoning"),
                     substantial=sum(
                         f["classification"] == "SUBSTANTIAL" for f in response.findings
                     ),

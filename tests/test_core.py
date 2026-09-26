@@ -389,3 +389,72 @@ def test_browser_state_is_contained(paths):
 )
 def test_phase_boundaries_are_enforced_by_the_hook(tmp_path, phase, tool, data):
     assert not allowed({"tool_name": tool, "tool_input": data}, tmp_path, phase)[0]
+
+
+async def test_reviewer_records_the_model_and_reasoning_that_answered():
+    from lxreview.contracts import ReviewRequest
+    from lxreview.reviewer import WebReviewer
+
+    class Browser:
+        choices = []
+
+        async def new_conversation(self):
+            pass
+
+        async def ensure_ready(self):
+            pass
+
+        async def configure(self, model, reasoning_effort):
+            self.choices.append((model, reasoning_effort))
+            return {"chatgpt_model": "GPT-5.5", "chatgpt_reasoning": "high"}
+
+        async def query(self, prompt, timeout):
+            return "VERDICT: CLEAN"
+
+    browser = Browser()
+    response = await WebReviewer(browser, {"backend": "chatgpt-web"}).review(
+        ReviewRequest(
+            target="https://github.com/o/r/pull/1",
+            head_sha="a" * 40,
+            model="GPT-5.5",
+            reasoning_effort="high",
+        )
+    )
+    assert browser.choices == [("GPT-5.5", "high")]
+    assert response.metadata == {
+        "backend": "chatgpt-web",
+        "chatgpt_model": "GPT-5.5",
+        "chatgpt_reasoning": "high",
+    }
+
+
+@pytest.mark.parametrize(
+    ("section", "values"),
+    [
+        ("reviewer", {"model": "GPT 5; rm"}),
+        ("reviewer", {"reasoning_effort": "High!"}),
+        ("worker", {"effort": "extreme"}),
+        ("worker", {"model": "opus --dangerously"}),
+    ],
+)
+def test_model_and_effort_settings_are_validated(section, values):
+    from pydantic import ValidationError
+
+    from lxreview.config import Config
+
+    with pytest.raises(ValidationError):
+        Config.model_validate({section: values})
+
+
+def test_timeline_names_the_reviewer_model_and_reasoning():
+    from lxreview.timeline import describe
+
+    event = {
+        "kind": "review_received",
+        "time": "",
+        "pass_number": 1,
+        "verdict": "CLEAN",
+        "model": "GPT-5.5",
+        "reasoning": "high",
+    }
+    assert describe(event)[0].endswith("Reviewer pass 1 complete (GPT-5.5, high), CLEAN")
