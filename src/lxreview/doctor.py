@@ -128,6 +128,23 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
         except (LXError, OSError, TimeoutError) as exc:
             add("Worker sandbox", False, str(exc))
         try:
+            from .git import unsafe_push_keys
+
+            # Outside any repository: only system and global settings, which affect every run.
+            result = run(
+                [binary("git"), "config", "--null", "--list"], paths, cwd=paths.root, check=False
+            )
+            problems = unsafe_push_keys(result.stdout)
+            add(
+                "Git push settings",
+                not problems,
+                "Global Git settings allow the worker's push"
+                if not problems
+                else "Global Git settings block every run: " + ", ".join(problems),
+            )
+        except (LXError, OSError, TimeoutError) as exc:
+            add("Git push settings", False, str(exc))
+        try:
             event = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git reset --hard"}})
             result = run(
                 [str(paths.executable), "guard", "--repo", str(paths.root)],

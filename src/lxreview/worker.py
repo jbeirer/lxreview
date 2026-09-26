@@ -441,7 +441,9 @@ async def execute(
                     paths,
                     config,
                     store,
-                    "Tests passed in the previous turn. Inspect the diff, stage only explicit changed files, create a normal git commit -m and run git push to the existing upstream. Stop on any failure. This turn permits Git publication only: no edits, tests, interpreters, hook bypass or force variants. Return the full commit SHA and pushed status.",
+                    "Tests passed in the previous turn. Inspect the diff, stage only explicit changed files, create a normal git commit -m and push with exactly `"
+                    + " ".join(repo.push_command())
+                    + "`. Stop on any failure. This turn permits Git publication only: no edits, tests, interpreters, hook bypass or force variants. Return the full commit SHA and pushed status.",
                     PublishResult,
                     read_only=False,
                 )

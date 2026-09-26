@@ -34,6 +34,9 @@ class Repo:
     def call(self, *args):
         return "diff --git a/file b/file\n+fix"
 
+    def push_command(self):
+        return ["git", "push", "origin", "HEAD:refs/heads/feature"]
+
 
 class Reviewer:
     def __init__(self, responses):
@@ -79,6 +82,8 @@ async def test_full_two_pass_loop_with_prior_raw_saved(paths, tmp_path, monkeypa
         assert (audit / "evaluation.json").exists()
         if schema is EditResult:
             return EditResult(tests=["pytest: 1 passed"], tests_passed=True, summary="fixed")
+        # The guard accepts only this exact push, so the prompt must name it.
+        assert "`git push origin HEAD:refs/heads/feature`" in prompt
         Repo.head_value = "b" * 40
         return PublishResult(pushed=True, commit=Repo.head_value)
 

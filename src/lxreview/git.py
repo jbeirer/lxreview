@@ -11,6 +11,20 @@ class PullRefPending(LXError):
     """Local HEAD is pushed, but GitHub's refs/pull/N/head still lags behind it."""
 
 
+# Configuration that redirects a push, pushes extra refs, or runs code during Git commands.
+FORBIDDEN = re.compile(
+    r"^(remote\..*\.(pushurl|mirror)|branch\..*\.pushremote|"
+    r"remote\.pushdefault|url\..*\.(pushinsteadof|insteadof)|"
+    r"push\.(followtags|recursesubmodules)|core\.hookspath|diff\.external|diff\..*\.(command|textconv))$"
+)
+
+
+def unsafe_push_keys(listing: str) -> list[str]:
+    """Forbidden key names in `git config --null --list` output; values may hold credentials."""
+    keys = {entry.partition("\n")[0].lower() for entry in listing.split("\0") if entry}
+    return sorted(key for key in keys if FORBIDDEN.fullmatch(key))
+
+
 class Repository:
     def __init__(self, path: Path, paths: Paths):
         self.path, self.paths = path.resolve(), paths
@@ -29,30 +43,12 @@ class Repository:
         )
 
     def check_push_policy(self) -> None:
-        # A bare `git push` can otherwise force/mirror unrelated refs via configuration.
         result = run([self.git, "config", "--null", "--list"], self.paths, cwd=self.path)
-        values: dict[str, list[str]] = {}
-        for entry in result.stdout.split("\0"):
-            key, _, value = entry.partition("\n")
-            values.setdefault(key.lower(), []).append(value)
-        forbidden = re.compile(
-            r"^(remote\..*\.(push|pushurl|mirror)|branch\..*\.pushremote|"
-            r"remote\.pushdefault|url\..*\.(pushinsteadof|insteadof)|"
-            r"push\.(followtags|recursesubmodules)|core\.hookspath|diff\.external|diff\..*\.(command|textconv))$"
-        )
-        # Key names only: values (e.g. URLs) may embed credentials.
-        problems = sorted(key for key in values if forbidden.fullmatch(key))
-        # Later scopes override earlier ones; judge the value git will actually use.
-        default = values.get("push.default", ["simple"])[-1]
-        if default not in ("simple", "upstream", "current"):
-            problems.append(
-                f"push.default={default} (fix: git config push.default simple in this repository)"
-            )
+        problems = unsafe_push_keys(result.stdout)
         if problems:
             raise LXError(
                 Category.UNSAFE,
-                "Git configuration can redirect or widen a plain `git push`: "
-                + "; ".join(problems),
+                "Git configuration can redirect a push or run extra code: " + "; ".join(problems),
             )
         upstream = self.call("rev-parse", "--abbrev-ref", "@{upstream}")
         branch = self.call("symbolic-ref", "--short", "HEAD")
@@ -60,6 +56,15 @@ class Repository:
             raise LXError(
                 Category.UNSAFE, "Local and upstream branch names must match for a normal push"
             )
+
+    def push_command(self) -> list[str]:
+        """The only push the worker may run: the current branch to its upstream, by refspec.
+
+        An explicit refspec pushes exactly one branch whatever push.default or
+        remote.*.push say, so no user Git configuration has to change.
+        """
+        remote, ref = self.call("rev-parse", "--abbrev-ref", "@{upstream}").split("/", 1)
+        return ["git", "push", remote, f"HEAD:refs/heads/{ref}"]
 
     def preflight(self, target: str, *, settle: float = 0) -> dict:
         """Verify the review checkpoint; wait up to `settle` s for GitHub's PR ref to catch up."""

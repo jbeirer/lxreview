@@ -103,3 +103,23 @@ async def test_doctor_reports_the_claude_login(paths, monkeypatch):
     assert checks["Claude Code"]["status"] == "FAIL"
     assert "claude auth login" in checks["Claude Code"]["detail"]
     assert "hidden@example.org" not in json.dumps(checks)
+
+
+async def test_doctor_names_global_git_settings_that_block_runs(paths, monkeypatch):
+    def run(argv, *a, **k):
+        if argv[1:] == ["config", "--null", "--list"]:
+            listing = "push.default\nmatching\0url.https://x.invalid/.insteadof\nhttps://token@github.com/\0"
+            return subprocess.CompletedProcess(argv, 0, listing, "")
+        return subprocess.CompletedProcess(argv, 1, "", "")
+
+    monkeypatch.setattr("lxreview.doctor.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("lxreview.doctor.run", run)
+    monkeypatch.setattr("lxreview.doctor.browser", lambda *a: Browser())
+    monkeypatch.setattr("lxreview.doctor.psutil.net_connections", lambda **k: [])
+    check = {c["check"]: c for c in await diagnose(paths, Config(), smoke=False)}[
+        "Git push settings"
+    ]
+    # push.default no longer matters; a redirecting URL rewrite does, named by key only.
+    assert check["status"] == "FAIL"
+    assert "url.https://x.invalid/.insteadof" in check["detail"]
+    assert "push.default" not in check["detail"] and "token@" not in check["detail"]

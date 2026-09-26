@@ -42,21 +42,41 @@ def repo(paths, tmp_path, monkeypatch):
     return Repository(directory, paths), git
 
 
-def test_normal_push_policy(repo):
+def push(command, repository):
+    return allowed(
+        {"tool_name": "Bash", "tool_input": {"command": command}}, repository.path, "publish"
+    )[0]
+
+
+def test_only_the_explicit_upstream_push_is_allowed(repo):
     repository, _ = repo
     repository.check_push_policy()
-    assert allowed(
-        {"tool_name": "Bash", "tool_input": {"command": "git push"}}, repository.path, "publish"
-    )[0]
+    assert repository.push_command() == ["git", "push", "origin", "HEAD:refs/heads/feature"]
+    assert push("git push origin HEAD:refs/heads/feature", repository)
+    for command in (
+        "git push",
+        "git push origin HEAD:refs/heads/main",
+        "git push --force origin HEAD:refs/heads/feature",
+    ):
+        assert not push(command, repository)
+
+
+@pytest.mark.parametrize(
+    "key,value", [("push.default", "matching"), ("remote.origin.push", "+HEAD:main")]
+)
+def test_settings_that_only_widen_a_bare_push_do_not_block(repo, key, value):
+    # The explicit refspec pushes one branch whatever these say, so users keep their config.
+    repository, git = repo
+    git("config", key, value)
+    repository.check_push_policy()
+    assert push("git push origin HEAD:refs/heads/feature", repository)
 
 
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("remote.origin.push", "+HEAD:main"),
         ("remote.origin.mirror", "true"),
         ("remote.origin.pushurl", "https://github.com/other/repo"),
-        ("push.default", "matching"),
         ("remote.pushDefault", "other"),
         ("branch.feature.pushRemote", "other"),
         ("url.https://other.invalid/.pushInsteadOf", "https://github.com/"),
@@ -68,9 +88,7 @@ def test_push_configuration_cannot_bypass_hook(repo, key, value):
     git("config", key, value)
     with pytest.raises(LXError):
         repository.check_push_policy()
-    assert not allowed(
-        {"tool_name": "Bash", "tool_input": {"command": "git push"}}, repository.path, "publish"
-    )[0]
+    assert not push("git push origin HEAD:refs/heads/feature", repository)
 
 
 def test_preflight_compares_actual_head_with_both_remote_refs(repo, monkeypatch):
@@ -102,16 +120,6 @@ def test_worktree_audit_stays_under_common_git_directory(repo, paths, tmp_path):
     git("worktree", "add", "-b", "another", str(worktree))
     assert Repository(worktree, paths).audit_root() == repository.path / ".git/review-loop"
     assert (worktree / ".git").is_file()
-
-
-def test_effective_push_default_is_checked_and_named(repo, monkeypatch):
-    repository, git = repo
-    git("config", "--add", "push.default", "matching")
-    with pytest.raises(LXError, match="push.default=matching"):
-        repository.check_push_policy()
-    # A later (higher-precedence) value is what git uses; earlier ones must not block.
-    git("config", "--add", "push.default", "simple")
-    repository.check_push_policy()
 
 
 def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):

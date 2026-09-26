@@ -166,15 +166,17 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
         ):
             return False, "Git operation is not allowed"
         if args[1] == "push":
-            if args != ["git", "push"]:
-                return False, "Only a normal push to the existing upstream is allowed"
             from .git import Repository
             from .paths import Paths
 
             try:
-                Repository(repo, Paths.default()).check_push_policy()
+                repository = Repository(repo, Paths.default())
+                expected = repository.push_command()
+                repository.check_push_policy()
             except Exception:
                 return False, "Unsafe Git push configuration; run preflight"
+            if args != expected:
+                return False, "Only `" + " ".join(expected) + "` is allowed"
             return True, ""
         if args[1] == "commit":
             return len(args) == 4 and args[
