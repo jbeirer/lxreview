@@ -11,6 +11,7 @@ from ..errors import Category, LXError
 
 KEY = "chatgpt-reviewer"
 HOME = "https://chatgpt.com/"
+NOT_RESPONDING = "Agentify is not responding yet; the browser may still be starting"
 
 
 class AgentifyAPI:
@@ -38,7 +39,11 @@ class AgentifyAPI:
                 trust_env=False,
                 timeout=httpx.Timeout(timeout, connect=3),
             ) as client:
-                health = await client.get("/health", timeout=3)
+                try:
+                    health = await client.get("/health", timeout=3)
+                except httpx.TimeoutException as exc:
+                    # Nothing was sent yet; a cold browser can stall for minutes.
+                    raise LXError(Category.UNAVAILABLE, NOT_RESPONDING) from exc
                 health_data = health.json()
                 if (
                     not isinstance(health_data, dict)
@@ -78,9 +83,14 @@ class AgentifyAPI:
                     raise LXError(Category.UNAVAILABLE, f"Agentify HTTP {response.status_code}")
                 return result
         except httpx.TimeoutException as exc:
+            if method == "GET":
+                raise LXError(Category.UNAVAILABLE, NOT_RESPONDING) from exc
+            path = endpoint.split("?")[0]
             raise LXError(
                 Category.TIMEOUT,
-                "Agentify deadline exceeded; submission may have occurred, so it was not retried",
+                "Agentify deadline exceeded; submission may have occurred, so it was not retried"
+                if path == "/query"
+                else f"Agentify did not answer {path} in time; it may still have acted, so it was not retried",
             ) from exc
         except httpx.RequestError as exc:
             raise LXError(

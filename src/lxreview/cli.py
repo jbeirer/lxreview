@@ -516,6 +516,10 @@ def _login_steps(paths: Paths, config: Config) -> None:
     console.print()
 
 
+# Seconds after which login shows its steps even if the browser has not answered yet.
+LOGIN_STEPS_AFTER = 15
+
+
 @app.command()
 def login(timeout: int = 600):
     """Guide human ChatGPT login; never collect passwords, cookies or MFA codes."""
@@ -538,47 +542,69 @@ def login(timeout: int = 600):
     async def wait():
         session = browser(paths, config)
         end = time.monotonic() + timeout
-        with console.status(Text(starting)) as status:
-            # Only read-only discovery is retried before the single navigation attempt.
+        shown = False
+
+        def show_steps():
+            nonlocal shown
+            if shown:
+                return
+            shown = True
+            if config.mode == "lxplus-browser":
+                _login_steps(paths, config)
+            else:
+                console.print(Text(f"Log in to ChatGPT {where}.", style="bold"))
+
+        async def retry(operation, *transient):
             while True:
                 try:
-                    await session.sessions()
-                    break
+                    return await operation()
                 except LXError as exc:
-                    if exc.category != Category.UNAVAILABLE or time.monotonic() >= end:
+                    if exc.category not in transient or time.monotonic() >= end:
                         raise
-                    await asyncio.sleep(3)
-            await session.new_conversation()
-            status.update(Text("Checking whether ChatGPT is already logged in…"))
-            # A freshly navigated page can briefly look logged out; only a second miss asks the human.
-            misses = 0
-            while True:
-                try:
-                    await session.ensure_ready()
-                    break
-                except LXError as exc:
-                    if exc.category != Category.AUTH:
-                        raise
-                misses += 1
-                if misses == 2:
-                    if config.mode == "lxplus-browser":
-                        _login_steps(paths, config)
-                    else:
-                        console.print(Text(f"Log in to ChatGPT {where}.", style="bold"))
-                left = end - time.monotonic()
-                if left <= 0:
-                    raise LXError(
-                        Category.AUTH,
-                        "Login deadline reached; finish login and rerun lxreview login",
-                    )
-                if misses >= 2:
-                    status.update(
-                        Text.assemble(
-                            f"Waiting for you to log in {where} ",
-                            (f"({int(left // 60) + 1} min left; Ctrl-C stops waiting)", "dim"),
-                        )
-                    )
                 await asyncio.sleep(3)
+
+        with console.status(Text(starting)) as status:
+            # A cold browser can stall for minutes, so the steps never wait for it.
+            reminder = asyncio.get_running_loop().call_later(LOGIN_STEPS_AFTER, show_steps)
+            try:
+                await retry(session.sessions, Category.UNAVAILABLE)
+                # Opening the keyed tab and navigating it are idempotent and send no prompt.
+                await retry(session.new_conversation, Category.UNAVAILABLE, Category.TIMEOUT)
+                status.update(Text("Checking whether ChatGPT is already logged in…"))
+                # A freshly navigated page can briefly look logged out; only a second miss asks the human.
+                misses = 0
+                while True:
+                    try:
+                        await session.ensure_ready()
+                        break
+                    except LXError as exc:
+                        if exc.category not in (
+                            Category.AUTH,
+                            Category.UNAVAILABLE,
+                            Category.TIMEOUT,
+                        ):
+                            raise
+                        if time.monotonic() >= end:
+                            if exc.category != Category.AUTH:
+                                raise
+                            raise LXError(
+                                Category.AUTH,
+                                "Login deadline reached; finish login and rerun lxreview login",
+                            ) from None
+                        if exc.category == Category.AUTH:
+                            misses += 1
+                    if misses >= 2:
+                        show_steps()
+                        left = end - time.monotonic()
+                        status.update(
+                            Text.assemble(
+                                f"Waiting for you to log in {where} ",
+                                (f"({int(left // 60) + 1} min left; Ctrl-C stops waiting)", "dim"),
+                            )
+                        )
+                    await asyncio.sleep(3)
+            finally:
+                reminder.cancel()
             status.update(Text("Checking that ChatGPT replies…"))
             marker = "LXREVIEW_LOGIN_" + secrets.token_hex(6)
             response = await session.query(f"Reply exactly {marker}", 60)
@@ -586,7 +612,7 @@ def login(timeout: int = 600):
                 raise LXError(
                     Category.PROTOCOL, "Login smoke response did not match; it was not retried"
                 )
-        return misses >= 2
+        return shown
 
     with lock(paths.root / "state/reviewer.lock"):
         prompted = asyncio.run(wait())

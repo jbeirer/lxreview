@@ -25,11 +25,14 @@ class FakeAgentify:
         self.server_id = "server-one"
         self.bad_auth = False
         self.query_timeout = False
+        self.stalled = set()
 
     def handle(self, request):
         path = request.url.path
         data = json.loads(request.content) if request.content else {}
         self.calls.append((path, data))
+        if path in self.stalled:
+            raise httpx.ReadTimeout("stalled")
         if path == "/health":
             return httpx.Response(200, json={"ok": True, "serverId": self.server_id})
         if request.headers.get("authorization") != "Bearer private-token" or self.bad_auth:
@@ -212,3 +215,31 @@ async def test_malformed_query_result_is_typed_failure(fake, response):
         await session.query("review", 5)
     assert error.value.category == Category.PROTOCOL
     assert service.query_count == 1
+
+
+@pytest.mark.parametrize("stalled", ["/health", "/tabs"])
+async def test_unanswered_read_is_retryable_not_ambiguous(fake, stalled):
+    service, session = fake
+    service.stalled.add(stalled)
+    with pytest.raises(LXError) as caught:
+        await session.sessions()
+    assert caught.value.category == Category.UNAVAILABLE
+    assert "may have occurred" not in str(caught.value)
+
+
+async def test_stalled_health_never_reaches_query(fake):
+    service, session = fake
+    service.stalled.add("/health")
+    with pytest.raises(LXError) as caught:
+        await session.query("review", 5)
+    assert caught.value.category == Category.UNAVAILABLE
+    assert service.query_count == 0
+
+
+async def test_unanswered_mutation_stays_ambiguous_and_names_endpoint(fake):
+    service, session = fake
+    service.stalled.add("/navigate")
+    with pytest.raises(LXError) as caught:
+        await session.new_conversation()
+    assert caught.value.category == Category.TIMEOUT
+    assert "/navigate" in str(caught.value)

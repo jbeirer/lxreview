@@ -103,14 +103,24 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
 
 
 class LoginSession:
-    def __init__(self, misses):
+    def __init__(self, misses, stalls=0):
         self.misses = misses
+        self.stalls = stalls
 
     async def sessions(self):
+        from lxreview.errors import Category, LXError
+
+        if self.stalls > 0:
+            self.stalls -= 1
+            raise LXError(Category.UNAVAILABLE, "Agentify is not responding yet")
         return []
 
     async def new_conversation(self):
-        pass
+        from lxreview.errors import Category, LXError
+
+        if self.stalls == 0:
+            self.stalls = -1
+            raise LXError(Category.TIMEOUT, "Agentify did not answer /navigate in time")
 
     async def ensure_ready(self):
         from lxreview.errors import Category, LXError
@@ -123,7 +133,7 @@ class LoginSession:
         return prompt.removeprefix("Reply exactly ")
 
 
-def login_output(paths, monkeypatch, misses):
+def login_output(paths, monkeypatch, misses, stalls=None):
     import asyncio
 
     from lxreview.config import Config
@@ -135,7 +145,8 @@ def login_output(paths, monkeypatch, misses):
     config.save(paths)
     atomic_write(paths.root / "secrets/vnc-viewer-password", "vncsecret")
     monkeypatch.setattr("lxreview.services.start", lambda *a: None)
-    monkeypatch.setattr("lxreview.backend.browser", lambda *a: LoginSession(misses))
+    session = LoginSession(misses, stalls) if stalls is not None else LoginSession(misses, -1)
+    monkeypatch.setattr("lxreview.backend.browser", lambda *a: session)
     real_sleep = asyncio.sleep
     monkeypatch.setattr(asyncio, "sleep", lambda seconds: real_sleep(0))
     result = runner.invoke(app, ["login"])
@@ -162,4 +173,14 @@ def test_login_shows_copyable_steps_once(paths, monkeypatch):
 def test_login_skips_steps_when_already_logged_in(paths, monkeypatch):
     text = login_output(paths, monkeypatch, misses=1)
     assert "ssh " not in text
+    assert "ChatGPT login verified" in text
+
+
+def test_login_shows_steps_while_a_cold_browser_stalls(paths, monkeypatch):
+    import lxreview.cli as cli
+
+    # The browser never reports a login page, yet the human still gets the steps in time.
+    monkeypatch.setattr(cli, "LOGIN_STEPS_AFTER", 0)
+    text = login_output(paths, monkeypatch, misses=0, stalls=3)
+    assert text.count("ssh -N") == 1
     assert "ChatGPT login verified" in text
