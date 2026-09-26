@@ -15,6 +15,8 @@ In a new Claude Code conversation:
 /review-loop https://github.com/owner/repository/pull/123
 ```
 
+Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
+
 The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. It never modifies shell startup files or PATH. Use the absolute executable path (shown above); `lxreview` below abbreviates that path. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
 
 ## Two browser placements
