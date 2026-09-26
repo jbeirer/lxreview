@@ -380,3 +380,21 @@ def test_model_and_effort_options_split_into_run_choices(chatgpt, claude, expect
     from lxreview.cli import model_choices
 
     assert model_choices(chatgpt, claude) == expected
+
+
+def test_the_stream_lists_findings_and_colors_a_clean_outcome_green():
+    from lxreview.timeline import describe, style
+
+    event = {
+        "kind": "review_received",
+        "time": "",
+        "pass_number": 1,
+        "verdict": "SUBSTANTIAL_ISSUES",
+        "substantial": 1,
+        "non_blocking": 1,
+        "findings": [{"id": "S1", "title": "Off by one"}, {"id": "N1", "title": "Typo"}],
+    }
+    texts = [line.split("  ", 1)[1] for line in describe(event)]
+    assert texts[1:] == ["  S1 Off by one", "  N1 Typo"]
+    assert style("  S1 Off by one") == "yellow" and style("  N1 Typo") == "dim"
+    assert style("Finished: NO_VALID_SUBSTANTIAL_FINDINGS") == "bold green"

@@ -494,7 +494,12 @@ def watch(
                 show(render(events, limit=240))
             current = (state["status"], state["pass"], state["phase"])
             if not raw and current != shown:
-                colour = {"RUNNING": "bold blue", "CLEAN": "bold green", "QUEUED": "bold"}.get(
+                colour = {
+                    "RUNNING": "bold blue",
+                    "CLEAN": "bold green",
+                    "NO_VALID_SUBSTANTIAL_FINDINGS": "bold green",
+                    "QUEUED": "bold",
+                }.get(
                     state["status"],
                     "bold yellow" if state["status"] == "MAX_PASSES" else "bold red",
                 )

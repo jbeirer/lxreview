@@ -1,5 +1,6 @@
 """Human-readable run timeline for `lxreview watch`; events are already redacted."""
 
+import re
 from datetime import datetime
 
 PHASES = {
@@ -117,12 +118,22 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
             + (f" ({used})" if used else "")
             + f", {event.get('verdict')}{counts}"
         ]
+        texts += [
+            f"  {finding.get('id')} {shorten(finding.get('title', ''), limit)}"
+            for finding in event.get("findings", [])
+            if isinstance(finding, dict)
+        ]
     elif kind == "finding_evaluated":
         texts = [
             f"{event.get('decision', '?'):<9} {event.get('finding')} {shorten(event.get('title', ''), limit)}"
         ]
         if event.get("reason"):
             texts.append(f"  because {shorten(event['reason'], limit)}")
+    elif kind == "polish_skipped":
+        texts = [
+            "Accepted non-blocking findings left for you (no unreviewed final-pass edits): "
+            + ", ".join(str(f) for f in event.get("findings", []))
+        ]
     elif kind == "evaluation_complete":
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
     elif kind == "tests_reported":
@@ -168,11 +179,15 @@ def style(text: str) -> str:
         ("  ", "dim"),
         ("Commit ", "bold green"),
         ("Finished: CLEAN", "bold green"),
+        ("Finished: NO_VALID_SUBSTANTIAL_FINDINGS", "bold green"),
+        ("Accepted non-blocking findings left", "yellow"),
         ("Finished: MAX_PASSES", "bold yellow"),
         ("Finished: ", "bold red"),
         ("Claude turn failed", "red"),
         ("Claude turn done", "dim"),
     )
+    if re.match(r"  S\d", text):
+        return "yellow"
     for prefix, value in rules:
         if text.startswith(prefix):
             return value

@@ -212,7 +212,7 @@ async def test_missing_finding_evaluation_fails_before_edit(paths, tmp_path, mon
     )
     await execute(paths, Config(), store, reviewer, turn)
     assert store.load()["status"] == "FAILED"
-    assert "every substantial" in store.load()["error"]
+    assert "every listed finding" in store.load()["error"]
 
 
 @pytest.mark.parametrize("phase", ["review", "evaluation"])
@@ -375,3 +375,81 @@ def test_the_reviewer_thinks_hardest_by_default():
     config = Config()
     assert config.reviewer.reasoning_effort == "highest" and config.reviewer.model == "default"
     assert (config.worker.model, config.worker.effort) == ("default", "default")
+
+
+def fixing_turn(decide, prompts):
+    """A fake Claude: evaluations from decide(listed ids), then a passing fix and a commit."""
+
+    async def turn(paths, config, store, prompt, schema, read_only):
+        prompts.append(prompt)
+        if read_only:
+            listed = prompt.split("finding listed here against this repository: ", 1)[1]
+            ids = listed.split(". ", 1)[0].split(", ")
+            return Evaluation(
+                findings=[
+                    Decision(finding=i, decision=decide(i), reason="checked", evidence="f:1")
+                    for i in ids
+                ]
+            )
+        if schema is EditResult:
+            return EditResult(tests=["checks: passed"], tests_passed=True, summary="fixed")
+        Repo.head_value = ("b" if Repo.head_value == "a" * 40 else "c") * 40
+        return PublishResult(commit=Repo.head_value)
+
+    return turn
+
+
+async def test_non_blocking_findings_are_weighed_with_substantial_ones(
+    paths, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("lxreview.worker.Repository", Repo)
+    Repo.head_value = "a" * 40
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(
+        [
+            "SUBSTANTIAL [S1] bug\nNON_BLOCKING [N1] misleading error text\nVERDICT: SUBSTANTIAL_ISSUES",
+            "NON_BLOCKING [N1] rename a variable\nVERDICT: CLEAN",
+        ]
+    )
+    turn = fixing_turn(lambda i: "REJECTED" if i == "S1" else "ACCEPTED", prompts)
+    await execute(paths, Config(), store, reviewer, turn)
+    # S1 rejected, N1 accepted: one polish pass, fixed, pushed and reviewed again.
+    assert "S1, N1" in prompts[0]
+    assert '"finding": "N1"' in prompts[1]
+    # Polish was already done this run: the clean second review ends it untouched.
+    assert len(prompts) == 3 and store.load()["status"] == "CLEAN"
+    assert [r.head_sha for r in reviewer.requests] == ["a" * 40, "b" * 40]
+
+
+async def test_a_clean_review_with_polish_gets_one_polish_pass(paths, tmp_path, monkeypatch):
+    monkeypatch.setattr("lxreview.worker.Repository", Repo)
+    Repo.head_value = "a" * 40
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(
+        [
+            "NON_BLOCKING [N1] missing test\nVERDICT: CLEAN",
+            "NON_BLOCKING [N1] more polish\nVERDICT: CLEAN",
+        ]
+    )
+    await execute(paths, Config(), store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    assert store.load()["status"] == "CLEAN"
+    assert len(reviewer.requests) == 2 and len(prompts) == 3
+
+
+async def test_final_pass_reports_polish_instead_of_editing(paths, tmp_path, monkeypatch):
+    monkeypatch.setattr("lxreview.worker.Repository", Repo)
+    Repo.head_value = "a" * 40
+    store = create(paths, tmp_path)
+    store.update(max_passes=1)
+    prompts = []
+    reviewer = Reviewer(
+        ["SUBSTANTIAL [S1] bug\nNON_BLOCKING [N1] typo in docs\nVERDICT: SUBSTANTIAL_ISSUES"]
+    )
+    turn = fixing_turn(lambda i: "REJECTED" if i == "S1" else "ACCEPTED", prompts)
+    await execute(paths, Config(), store, reviewer, turn)
+    assert store.load()["status"] == "NO_VALID_SUBSTANTIAL_FINDINGS"
+    assert len(prompts) == 1
+    events = (store.directory / "events.jsonl").read_text()
+    assert '"polish_skipped"' in events and '"N1"' in events
