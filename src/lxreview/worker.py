@@ -13,14 +13,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import toolchain
 from .config import Config, executable
 from .contracts import ReviewerBackend, ReviewRequest, Verdict
 from .errors import Category, LXError
 from .git import PullRefPending, Repository
 from .paths import Paths, append_private, atomic_write, lock, private_dir, write_json
-from .process import environment
 from .runs import RunStore
-from .security import redact
+from .security import SECRET_NAMES, redact, secret_locations
 
 
 class Decision(BaseModel):
@@ -46,11 +46,33 @@ class EditResult(BaseModel):
 class PublishResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     commit: str = Field(pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$")
-    pushed: bool
 
 
 class FixResult(EditResult, PublishResult):
-    """Combined audit record; Claude edits/tests and publishes in separate restricted turns."""
+    """Combined audit record; Claude edits/tests and commits in separate restricted turns."""
+
+    pushed: bool
+
+
+def secret_read_paths(paths: Paths) -> list[str]:
+    """Paths no sandboxed command may read."""
+    home = Path.home()
+    denied = [paths.root, *secret_locations(home), *(home / name for name in sorted(SECRET_NAMES))]
+    ticket = os.environ.get("KRB5CCNAME", "").removeprefix("FILE:")
+    if ticket.startswith("/"):
+        denied.append(Path(ticket))
+    denied.append(Path(f"/tmp/krb5cc_{os.getuid()}"))
+    return [str(path) for path in dict.fromkeys(denied)]
+
+
+_setups: dict[str, dict[str, str]] = {}
+
+
+def project_setup(repo: Path, paths: Paths, config: Config) -> dict[str, str]:
+    """The configured setup command's environment, captured once per worker process."""
+    if str(repo) not in _setups:
+        _setups[str(repo)] = toolchain.setup_environment(repo, paths, config)
+    return _setups[str(repo)]
 
 
 async def claude_turn(
@@ -77,15 +99,19 @@ async def claude_turn(
                 ]
             },
             "permissions": {
-                "blockReadsOutsideWorkingDirectories": True,
                 # No Read(**/...) globs: Claude Code merges them into the Bash sandbox, and on
                 # Linux expands them into one mount per matching file (every file under .git),
                 # which overflows the exec argument limit and hides .git from git itself. The
                 # guard hook enforces the protected-path policy for the file tools instead.
+                # Reads outside the repository stay open (toolchains, system headers, CVMFS);
+                # blockReadsOutsideWorkingDirectories would hide the whole home directory from
+                # every command, and with it most toolchains.
                 "deny": ["Agent", "Task", "WebFetch", "WebSearch"],
             },
             # Commits carry only the user's own identity, with no Claude trailer or link.
             "attribution": False,
+            # The user's memories for other work are no context for an autonomous fix.
+            "autoMemoryEnabled": False,
             "disableAllHooks": False,
             "sandbox": {
                 "enabled": True,
@@ -95,30 +121,10 @@ async def claude_turn(
                 "excludedCommands": [],
                 "filesystem": {
                     "allowWrite": [str(git_common)] if phase == "publish" else [],
-                    # Only publication may read Git identity/credential helpers (for `git
-                    # commit`/`git push`); the hook still limits Bash to those Git commands.
-                    # allowRead takes precedence over the broader denyRead regions below.
-                    "allowRead": [
-                        str(Path.home() / ".gitconfig"),
-                        str(Path.home() / ".git-credentials"),
-                        str(Path.home() / ".config/git"),
-                        str(Path.home() / ".config/gh"),
-                    ]
-                    if phase == "publish"
-                    else [],
-                    "denyRead": [
-                        str(paths.root / "secrets"),
-                        str(paths.root / "state"),
-                        str(Path.home() / ".config"),
-                        str(Path.home() / "Library"),
-                        str(Path.home() / ".aws"),
-                        str(Path.home() / ".gnupg"),
-                        str(Path.home() / ".netrc"),
-                        str(Path.home() / ".npmrc"),
-                        str(Path.home() / ".git-credentials"),
-                        str(Path.home() / ".claude/.credentials.json"),
-                        str(Path.home() / ".ssh"),
-                    ],
+                    # Git reads its user configuration from ~/.config/git (ignores,
+                    # attributes, identity) although ~/.config as a whole is secret.
+                    "allowRead": [str(Path.home() / ".config/git")],
+                    "denyRead": secret_read_paths(paths),
                     "denyWrite": (
                         [str(git_common), str(repo / ".git")] if phase != "publish" else []
                     )
@@ -131,14 +137,15 @@ async def claude_turn(
                         str(git_common / "review-loop"),
                         str(repo / ".claude"),
                         str(repo / ".codex"),
+                        str(repo / ".lfsconfig"),
+                        str(repo / ".gitmodules"),
                     ],
                 },
+                # No network in any phase: LXReview pushes the commit itself.
                 "network": {
                     "allowLocalBinding": False,
                     "allowAllUnixSockets": False,
-                    "allowedDomains": ["github.com", "api.github.com", "ssh.github.com"]
-                    if phase == "publish"
-                    else [],
+                    "allowedDomains": [],
                     "strictAllowlist": True,
                 },
             },
@@ -175,17 +182,16 @@ async def claude_turn(
     session_id = session_file.read_text().strip()
     if session_id:
         argv += ["--resume", session_id]
-    child_environment = environment(paths)
-    if phase != "publish":
-        child_environment.pop("SSH_AUTH_SOCK", None)
-        child_environment.pop("KRB5CCNAME", None)
-    # The sandbox reaches its network proxy through a socket under TMPDIR. Below the
-    # installation root (read-only to sandboxed commands) the socket is unreachable and every
-    # push fails with "Proxy CONNECT aborted"; a short path also stays within the socket
-    # path limit. mkdtemp creates the directory 0700.
+    # The sandbox reaches its proxy through a socket under TMPDIR, which must be outside the
+    # installation root (read-only to sandboxed commands) and short enough for a socket
+    # path. mkdtemp creates the directory 0700. It also holds the turn's writable caches.
     scratch = tempfile.mkdtemp(prefix="lxreview-", dir="/tmp")
-    child_environment["TMPDIR"] = scratch
+    mounts: list[int] = []
     try:
+        child_environment = toolchain.turn_environment(
+            repo, paths, config, Path(scratch), project_setup(repo, paths, config)
+        )
+        mounts = toolchain.pin_mounts(child_environment, config)
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=repo,
@@ -198,6 +204,8 @@ async def claude_turn(
         )
     except BaseException:
         shutil.rmtree(scratch, ignore_errors=True)
+        for descriptor in mounts:
+            os.close(descriptor)
         raise
     result = None
 
@@ -275,6 +283,8 @@ async def claude_turn(
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(process.wait(), 5)
             shutil.rmtree(scratch, ignore_errors=True)
+            for descriptor in mounts:
+                os.close(descriptor)
             store.update(claude_pid=None)
 
 
@@ -282,10 +292,12 @@ def command_guidance(config: Config) -> str:
     """How the edit turn should run commands, so the guard has nothing to refuse."""
     text = (
         " Commands run in the repository root: use relative paths and plain `git ...`, and"
-        " run each tool directly rather than through a shell, env or another wrapper. Prefer"
-        " the Grep, Glob and Read tools for searching and reading files."
+        " run each tool directly rather than through a shell, env or another wrapper. Put"
+        " patterns and test selectors in single quotes (for example"
+        " 'tests/test_x.py::test_y[case]'); the shell expands nothing there. Prefer the Grep,"
+        " Glob and Read tools for searching and reading files."
     )
-    workers = config.review.test_workers
+    workers = config.verify.test_workers
     if workers == "auto":
         text += (
             " Run full test suites in parallel on all available CPUs when the project's test"
@@ -442,7 +454,7 @@ async def execute(
                         paths,
                         config,
                         store,
-                        "Fix only these accepted findings with minimal relevant changes. Then verify the change the way this project verifies changes: find out from its CI configuration, build files and contributor documentation which checks it runs (tests, type checking, linting, formatting, builds) and run the ones that apply, using the project's own local environment and tools. Fix what they report in the code you changed, and inspect the diff. Do not stage, commit or push in this turn. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled, so run checks offline. Use one literal shell command per call. Return every check command with its result under tests, tests_passed true only if every check you ran passed, and a concise summary."
+                        "Fix only these accepted findings with minimal relevant changes. Then verify the change the way this project verifies changes: find out from its CI configuration, build files and contributor documentation which checks it runs (tests, type checking, linting, formatting, builds) and run the ones that apply, using the project's own local environment and tools (for example its .venv or node_modules/.bin; common toolchains and any configured environment are already on PATH). Fix what they report in the code you changed, and inspect the diff. If a check cannot run here because its tool is missing or it needs the network or anything else the sandbox withholds, do not work around the sandbox: list it under tests as NOT RUN with the reason. Checks that could not run do not fail the pass, but never report a check as passed that you did not run. Do not stage, commit or push in this turn. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled, so run checks offline. Use one literal shell command per call. Return every check command with its result under tests, tests_passed true only if every check you ran passed, and a concise summary."
                         + command_guidance(config)
                         + "\n\n"
                         + json.dumps([d.model_dump() for d in accepted]),
@@ -485,21 +497,19 @@ async def execute(
                     paths,
                     config,
                     store,
-                    "Tests passed in the previous turn. Inspect the diff, stage only explicit changed files, create a normal git commit -m whose message describes the change only, with no Co-Authored-By or other trailers and no mention of Claude or AI, and push with exactly `"
-                    + " ".join(repo.push_command())
-                    + "`. Stop on any failure. This turn permits Git publication only: no edits, tests, interpreters, hook bypass or force variants. Return the full commit SHA and pushed status.",
+                    "The checks passed in the previous turn. Inspect the diff, stage only the explicitly changed files with git add, and commit them with git commit -m <subject> (optionally more -m <paragraph> options, and -s when the project requires a sign-off). Add --no-gpg-sign: LXReview signs the commit afterwards when the user's Git configuration asks for it. The message describes the change only, following the project's commit conventions, with no Co-Authored-By or other trailers and no mention of Claude or AI. Do not push: LXReview pushes the commit after this turn. If a commit hook fails, report it and stop; never bypass hooks. This turn permits Git staging and committing only: no edits, tests or other commands. Return the full commit SHA.",
                     PublishResult,
                     read_only=False,
                 )
                 assert isinstance(published, PublishResult)
-                fixes = FixResult(**fixes.model_dump(), **published.model_dump())
+                store.event("push_started", commit=published.commit)
+                pushed = repo.publish(
+                    published.commit,
+                    identity["head"],
+                    toolchain.push_environment(paths, config),
+                )
+                fixes = FixResult(**fixes.model_dump(), commit=pushed, pushed=True)
                 write_json(pass_dir / "metadata.json", redact(fixes.model_dump()))
-                if not fixes.pushed:
-                    raise LXError(
-                        Category.PROTOCOL,
-                        f"Push failed; commit {fixes.commit[:10]} exists only locally. "
-                        "Inspect the run logs, push it yourself, then resume",
-                    )
                 repo.verify_identity(state["identity"])
                 after = await settled_preflight(repo, state["target"])
                 atomic_write(

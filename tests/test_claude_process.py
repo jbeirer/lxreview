@@ -134,14 +134,17 @@ settings=json.load(open(sys.argv[sys.argv.index('--settings')+1]))
 command=shlex.split(settings['hooks']['PreToolUse'][0]['hooks'][0]['command'])
 phase=command[command.index('--phase')+1]
 assert phase in ('edit','publish')
-assert bool(settings['sandbox']['network']['allowedDomains']) == (phase=='publish')
-assert ('SSH_AUTH_SOCK' in os.environ) == (phase=='publish')
+# LXReview pushes itself: no Claude phase has network or agent access.
+assert settings['sandbox']['network']['allowedDomains'] == []
+assert 'SSH_AUTH_SOCK' not in os.environ
+assert 'blockReadsOutsideWorkingDirectories' not in settings['permissions']
+assert any(path.endswith('/.ssh') for path in settings['sandbox']['filesystem']['denyRead'])
 if phase=='edit':
     assert any(path.endswith('.git') for path in settings['sandbox']['filesystem']['denyWrite'])
     result={'tests':['pytest: passed'],'tests_passed':True,'summary':'fixed'}
 else:
     assert 'Edit' not in sys.argv[sys.argv.index('--tools')+1].split(',')
-    result={'commit':'a'*40,'pushed':True}
+    result={'commit':'a'*40}
 sys.stdin.read()
 print(json.dumps({'type':'result','is_error':False,'structured_output':result}),flush=True)
 """

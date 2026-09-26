@@ -83,40 +83,175 @@ INDIRECT = {
     "crontab",
 }
 
-PROTECTED = {
-    ".git",
+# Never readable, wherever they are: credentials and other people's secrets.
+SECRET_NAMES = {
     ".ssh",
     ".aws",
+    ".gnupg",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".git-credentials",
+    ".docker",
+    ".kube",
+    ".password-store",
+    ".envrc",
+    ".env",
+}
+# Committed templates such as .env.example hold no secrets; other .env.* files may.
+ENV_TEMPLATES = (".example", ".sample", ".template", ".dist", ".defaults")
+# Secret locations in the home directory (anchored there, so a repository's own
+# Library/ or config/ stays usable).
+SECRET_HOME = (
     ".config",
+    ".claude",
+    ".claude.json",
+    ".lxreview",
+    "Library",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".gem/credentials",
+    ".m2/settings.xml",
+    ".m2/settings-security.xml",
+    ".gradle/gradle.properties",
+    ".terraform.d",
+    ".azure",
+    ".local/share/keyrings",
+    ".mozilla",
+    ".thunderbird",
+    ".pki",
+    ".bash_history",
+    ".zsh_history",
+    ".python_history",
+    ".node_repl_history",
+    ".psql_history",
+    ".mysql_history",
+    ".lesshst",
+    ".viminfo",
+)
+# Readable, but never written by the worker: Git metadata and files that make tools run
+# code or change behavior later, outside the sandbox.
+CONFIG_NAMES = {
+    ".git",
+    ".gitmodules",
+    ".gitconfig",
+    ".lfsconfig",
     ".claude",
     ".codex",
     ".lxreview",
-    ".env",
     ".bashrc",
     ".bash_profile",
     ".zshrc",
+    ".zprofile",
     ".profile",
-    "Cookies",
-    "Login Data",
-    "Local State",
-    "Library",
-    ".netrc",
-    ".npmrc",
-    ".gitconfig",
-    ".gitmodules",
-    ".git-credentials",
-    ".gnupg",
+}
+PROTECTED = SECRET_NAMES | CONFIG_NAMES
+# Commands that modify their path arguments; those must stay inside the repository.
+MODIFYING = {
+    "rm",
+    "rmdir",
+    "unlink",
+    "mv",
+    "cp",
+    "ln",
+    "install",
+    "rsync",
+    "chmod",
+    "chown",
+    "chgrp",
+    "touch",
+    "mkdir",
+    "truncate",
+    "shred",
+    "dd",
+    "tee",
+}
+GIT_READ = {
+    "status",
+    "diff",
+    "show",
+    "log",
+    "rev-parse",
+    "rev-list",
+    "blame",
+    "ls-files",
+    "grep",
+    "describe",
+    "merge-base",
+    "cat-file",
+    "shortlog",
 }
 
 
-def safe_path(value: str, repo: Path) -> bool:
+def secret_locations(home: Path | None = None) -> list[Path]:
+    home = home or Path.home()
+    return [home / name for name in SECRET_HOME]
+
+
+def secret_name(part: str) -> bool:
+    if part in SECRET_NAMES:
+        return True
+    return part.startswith(".env.") and not part.endswith(ENV_TEMPLATES)
+
+
+def resolve(value: str, repo: Path) -> tuple[Path, Path]:
     candidate = Path(value).expanduser()
     if not candidate.is_absolute():
         candidate = repo / candidate
-    resolved = candidate.resolve()
-    return resolved.is_relative_to(repo.resolve()) and not any(
-        p in PROTECTED or p.startswith(".env.") for p in (*candidate.parts, *resolved.parts)
+    return candidate, candidate.resolve()
+
+
+def secret(value: str, repo: Path) -> bool:
+    candidate, resolved = resolve(value, repo)
+    if any(secret_name(p) for p in (*candidate.parts, *resolved.parts)):
+        return True
+    return any(
+        path.is_relative_to(location)
+        for path in (candidate, resolved)
+        for location in secret_locations()
     )
+
+
+def readable(value: str, repo: Path) -> bool:
+    """Anything but secrets, and Git internals (remote URLs can hold credentials)."""
+    candidate, resolved = resolve(value, repo)
+    inside = resolved.is_relative_to(repo.resolve())
+    return not secret(value, repo) and not (inside and ".git" in resolved.parts)
+
+
+def safe_path(value: str, repo: Path) -> bool:
+    """Writable by the worker: inside the repository, no secret and no protected config."""
+    candidate, resolved = resolve(value, repo)
+    return (
+        resolved.is_relative_to(repo.resolve())
+        and not secret(value, repo)
+        and not any(p in CONFIG_NAMES for p in (*candidate.parts, *resolved.parts))
+    )
+
+
+def shell_unsafe(command: str) -> bool:
+    """Composition, redirection, expansion or substitution the shell would act on.
+
+    Text in single quotes is literal to the shell, so test selectors such as
+    'test_x.py::test_y[param]' or 'not (slow or gpu)' stay usable there; double quotes
+    still expand $, backticks and backslashes.
+    """
+    if "\n" in command or "\r" in command:
+        return True
+    quote = None
+    for character in command:
+        if quote == "'":
+            quote = None if character == "'" else quote
+        elif quote == '"':
+            if character == '"':
+                quote = None
+            elif character in "$`\\":
+                return True
+        elif character in "'\"":
+            quote = character
+        elif character in ";|&`$><\\*?[]{}()!":
+            return True
+    return quote is not None
 
 
 def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
@@ -133,18 +268,25 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
         return False, "Worker working directory changed"
     if tool == "StructuredOutput":
         return True, ""  # Claude's schema result tool performs no filesystem or shell operation.
-    if tool in ("Read", "Write", "Edit", "MultiEdit", "Glob", "Grep"):
+    if tool in ("Write", "Edit", "MultiEdit"):
+        name = data.get("file_path", "")
+        return (
+            isinstance(name, str) and bool(name) and safe_path(name, repo),
+            "Edits must stay within the repository and outside protected paths",
+        )
+    if tool in ("Read", "Glob", "Grep"):
         name = data.get("file_path", data.get("path", "."))
-        ok = isinstance(name, str) and safe_path(name, repo)
+        ok = isinstance(name, str) and readable(name, repo)
         if tool in ("Glob", "Grep"):
             pattern = data.get("pattern", "")
             ok = (
                 ok
-                and ".." not in pattern
+                and isinstance(pattern, str)
                 and not pattern.startswith("/")
+                and ".." not in pattern
                 and not any(x in pattern for x in PROTECTED)
             )
-        return ok, "File access must stay within the repository and outside protected paths"
+        return ok, "Secrets and Git internals are not readable"
     if tool != "Bash":
         return (
             False,
@@ -153,42 +295,23 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
     if data.get("dangerouslyDisableSandbox") or data.get("run_in_background"):
         return False, "Workers cannot bypass the sandbox or detach tool processes"
     command = data.get("command", "")
-    if not isinstance(command, str) or any(
-        x in command
-        for x in (
-            "\n",
-            "\r",
-            ";",
-            "|",
-            "&",
-            "`",
-            "$",
-            ">",
-            "<",
-            "\\",
-            "*",
-            "?",
-            "[",
-            "]",
-            "{",
-            "}",
-            "(",
-            ")",
-            "!",
-        )
-    ):
+    if not isinstance(command, str) or shell_unsafe(command):
         return (
             False,
-            "Use a single literal command without shell expansion, redirection, or composition",
+            "Use a single literal command without shell expansion, redirection, or composition;"
+            " put patterns in single quotes",
         )
     try:
         args = shlex.split(command)
     except ValueError:
         return False, "Malformed command"
+    # `NAME=value cmd` runs cmd: judge the command itself, keeping the assignments harmless.
+    while args and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", args[0]):
+        if args[0].split("=", 1)[0].upper().startswith(("GIT_", "LD_", "DYLD_", "PATH")):
+            return False, "Git, loader and PATH variables cannot be set for worker commands"
+        args = args[1:]
     if not args:
         return False, "Empty command"
-    if any(x in command.lower() for x in ("--no-verify", "--force", "--hard", "core.hookspath")):
-        return False, "Destructive git operations and hook bypass are blocked"
     exe = args[0]
     if Path(exe).name == "git":
         # /usr/bin/git and friends get the same Git rules as plain git.
@@ -210,36 +333,31 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
     if phase == "publish" and exe != "git":
         return False, "Publication permits only Git commands"
     if exe == "git":
-        if phase != "publish" and len(args) > 1 and args[1] in ("add", "commit", "push"):
-            return False, "Git mutation is restricted to the publication phase"
-        if len(args) < 2 or args[1] not in (
-            "status",
-            "diff",
-            "show",
-            "log",
-            "rev-parse",
-            "add",
-            "commit",
-            "push",
+        if any(
+            x in command.lower() for x in ("--no-verify", "--force", "--hard", "core.hookspath")
         ):
+            return False, "Destructive git operations and hook bypass are blocked"
+        if len(args) < 2 or args[1] not in (
+            GIT_READ | ({"add", "commit"} if phase == "publish" else set())
+        ):
+            if len(args) > 1 and args[1] == "push":
+                return False, "LXReview pushes the commit itself after this turn"
+            if len(args) > 1 and args[1] in ("add", "commit"):
+                return False, "Git mutation is restricted to the publication phase"
             return False, "Git operation is not allowed"
-        if args[1] == "push":
-            from .git import Repository
-            from .paths import Paths
-
-            try:
-                repository = Repository(repo, Paths.default())
-                expected = repository.push_command()
-                repository.check_push_policy()
-            except Exception:
-                return False, "Unsafe Git push configuration; run preflight"
-            if args != expected:
-                return False, "Only `" + " ".join(expected) + "` is allowed"
-            return True, ""
         if args[1] == "commit":
-            if len(args) != 4 or args[2] != "-m":
-                return False, "Only git commit -m with a literal message is allowed"
-            if ATTRIBUTION.search(args[3]):
+            messages, rest = [], args[2:]
+            while rest:
+                if rest[0] == "-m" and len(rest) > 1:
+                    messages.append(rest[1])
+                    rest = rest[2:]
+                elif rest[0] in ("-s", "--signoff", "--no-gpg-sign"):
+                    rest = rest[1:]
+                else:
+                    return False, "Use git commit -m <message> [-m <body>] [-s] [--no-gpg-sign]"
+            if not messages:
+                return False, "Use git commit -m <message> [-m <body>] [-s] [--no-gpg-sign]"
+            if any(ATTRIBUTION.search(m) for m in messages):
                 return False, "Commit messages carry no co-author trailer or Claude attribution"
             return True, ""
         if args[1] == "add":
@@ -247,18 +365,19 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
                 not x.startswith(("-", ":")) and safe_path(x, repo) and not (repo / x).is_dir()
                 for x in args[2:]
             ), "Stage explicit repository paths"
-        if args[1] in ("diff", "show", "log") and any(
-            x.startswith(("--output", "--ext-diff", "--textconv", "--exec")) for x in args[2:]
+        if any(
+            x.startswith(
+                ("--output", "--ext-diff", "--textconv", "--exec", "--open-files-in-pager")
+            )
+            or x == "-O"
+            for x in args[2:]
         ):
             return False, "External git execution/output options are blocked"
     # Compare whole path components (also inside rev:path and --opt=path) so that
     # .gitignore, .github/ or test_credentials.py are not mistaken for .git or secrets.
-    if ".." in args or any(
-        part in PROTECTED or part.startswith(".env")
-        for arg in args
-        for part in re.split(r"[/:=]", arg)
-    ):
-        return False, "Protected paths and parent directory access are blocked"
+    parts = [part for arg in args for part in re.split(r"[/:=]", arg)]
+    if any(secret_name(part) or part in CONFIG_NAMES for part in parts):
+        return False, "Secrets and protected configuration paths are blocked"
     if (
         exe == "rg"
         and any(
@@ -282,8 +401,16 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
         return False, "Ripgrep external commands and hidden-file scanning are blocked"
     for arg in args[1:]:
         value = arg.split("=", 1)[-1] if arg.startswith("-") else arg
-        if not value.startswith("-") and not safe_path(value, repo):
-            return False, "External path access is blocked"
+        if not value or value.startswith("-") or "/" not in value and not value.startswith("~"):
+            continue
+        if secret(value, repo):
+            return False, "Secrets are not readable"
+        if Path(exe).name in MODIFYING and not safe_path(value, repo):
+            return False, "Files outside the repository cannot be modified"
+    if Path(exe).name in MODIFYING and any(
+        not x.startswith("-") and not safe_path(x, repo) for x in args[1:]
+    ):
+        return False, "Files outside the repository cannot be modified"
     return True, ""
 
 

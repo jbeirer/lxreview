@@ -48,28 +48,62 @@ def push(command, repository):
     )[0]
 
 
-def test_only_the_explicit_upstream_push_is_allowed(repo):
+def test_the_worker_never_pushes_itself(repo):
     repository, _ = repo
     repository.check_push_policy()
     assert repository.push_command() == ["git", "push", "origin", "HEAD:refs/heads/feature"]
-    assert push("git push origin HEAD:refs/heads/feature", repository)
     for command in (
+        "git push origin HEAD:refs/heads/feature",
         "git push",
-        "git push origin HEAD:refs/heads/main",
         "git push --force origin HEAD:refs/heads/feature",
     ):
         assert not push(command, repository)
 
 
-@pytest.mark.parametrize(
-    "key,value", [("push.default", "matching"), ("remote.origin.push", "+HEAD:main")]
-)
-def test_settings_that_only_widen_a_bare_push_do_not_block(repo, key, value):
-    # The explicit refspec pushes one branch whatever these say, so users keep their config.
+@pytest.fixture
+def remote(repo, tmp_path):
     repository, git = repo
-    git("config", key, value)
-    repository.check_push_policy()
-    assert push("git push origin HEAD:refs/heads/feature", repository)
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+    git("remote", "set-url", "origin", str(bare))
+    git("push", "-q", "origin", "HEAD:refs/heads/feature")
+    return bare
+
+
+def test_publish_pushes_exactly_the_one_worker_commit(repo, remote, paths):
+    from lxreview import process
+
+    repository, git = repo
+    base = repository.head()
+    (repository.path / "fix.py").write_text("fixed = True\n")
+    git("add", "fix.py")
+    git("commit", "-q", "-m", "Fix it")
+    commit = repository.head()
+    assert repository.publish(commit, base, process.environment(paths)) == commit
+    pushed = subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/feature"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert pushed == commit
+
+
+@pytest.mark.parametrize("problem", ["two commits", "dirty tree", "wrong commit"])
+def test_publish_refuses_anything_but_one_clean_commit(repo, remote, paths, problem):
+    from lxreview import process
+
+    repository, git = repo
+    base = repository.head()
+    for name in ("a", "b") if problem == "two commits" else ("a",):
+        (repository.path / name).write_text(name)
+        git("add", name)
+        git("commit", "-q", "-m", name)
+    if problem == "dirty tree":
+        (repository.path / "a").write_text("changed")
+    reported = base if problem == "wrong commit" else repository.head()
+    with pytest.raises(LXError):
+        repository.publish(reported, base, process.environment(paths))
 
 
 @pytest.mark.parametrize(
@@ -83,12 +117,11 @@ def test_settings_that_only_widen_a_bare_push_do_not_block(repo, key, value):
         ("diff.external", "/tmp/command"),
     ],
 )
-def test_push_configuration_cannot_bypass_hook(repo, key, value):
+def test_push_configuration_cannot_redirect_the_push(repo, key, value):
     repository, git = repo
     git("config", key, value)
     with pytest.raises(LXError):
         repository.check_push_policy()
-    assert not push("git push origin HEAD:refs/heads/feature", repository)
 
 
 def test_preflight_compares_actual_head_with_both_remote_refs(repo, monkeypatch):
@@ -180,6 +213,33 @@ def test_git_dash_c_is_accepted_only_for_the_repository(repo, tmp_path):
 
     assert command(f"git -C {repository.path} diff")
     assert command(f"git -C {repository.path} status --porcelain", "publish")
-    assert push(f"git -C {repository.path} push origin HEAD:refs/heads/feature", repository)
+    assert command(f"git -C {repository.path} log --oneline -3")
     assert not command(f"git -C {tmp_path} diff")
     assert not command(f"git -C {repository.path} reset --hard")
+
+
+@pytest.mark.parametrize(
+    ("remote_url", "allowed_main"),
+    [("https://github.com/org/repo.git", False), ("git@github.com:contributor/repo.git", True)],
+)
+def test_main_branch_is_refused_only_on_the_base_repository(
+    repo, monkeypatch, remote_url, allowed_main
+):
+    repository, git = repo
+    git("branch", "-m", "main")
+    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+    git("branch", "--set-upstream-to=origin/main")
+    git("remote", "set-url", "origin", remote_url)
+    head = git("rev-parse", "HEAD")
+    original = repository.call
+    monkeypatch.setattr(
+        repository,
+        "call",
+        lambda *args: head + "\t" + args[-1] if args[0] == "ls-remote" else original(*args),
+    )
+    target = "https://github.com/org/repo/pull/12"
+    if allowed_main:
+        assert repository.preflight(target)["branch"] == "main"
+    else:
+        with pytest.raises(LXError, match="feature branch"):
+            repository.preflight(target)

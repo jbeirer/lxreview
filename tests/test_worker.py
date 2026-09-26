@@ -41,6 +41,13 @@ class Repo:
     def push_command(self):
         return ["git", "push", "origin", "HEAD:refs/heads/feature"]
 
+    def publish(self, commit, base, env):
+        if commit != self.head_value or base == commit:
+            from lxreview.errors import Category, LXError
+
+            raise LXError(Category.UNSAFE, "Publication must add exactly one commit")
+        return commit
+
 
 class Reviewer:
     def __init__(self, responses):
@@ -86,10 +93,10 @@ async def test_full_two_pass_loop_with_prior_raw_saved(paths, tmp_path, monkeypa
         assert (audit / "evaluation.json").exists()
         if schema is EditResult:
             return EditResult(tests=["pytest: 1 passed"], tests_passed=True, summary="fixed")
-        # The guard accepts only this exact push, so the prompt must name it.
-        assert "`git push origin HEAD:refs/heads/feature`" in prompt
+        # LXReview pushes; the worker only commits.
+        assert "Do not push" in prompt
         Repo.head_value = "b" * 40
-        return PublishResult(pushed=True, commit=Repo.head_value)
+        return PublishResult(commit=Repo.head_value)
 
     await execute(paths, Config(), store, reviewer, turn)
     assert store.load()["status"] == "CLEAN"
@@ -158,8 +165,8 @@ async def test_failed_push_cannot_become_clean(paths, tmp_path, monkeypatch):
             )
         if args[4] is EditResult:
             return EditResult(tests=["pytest passes"], tests_passed=True, summary="fixed")
-        Repo.head_value = "b" * 40
-        return PublishResult(commit=Repo.head_value, pushed=False)
+        # The worker reports a commit that is not HEAD: publication must refuse it.
+        return PublishResult(commit="b" * 40)
 
     reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
     await execute(paths, Config(), store, reviewer, turn)
@@ -324,7 +331,7 @@ def test_edit_turn_names_the_test_worker_count(workers, expected):
     from lxreview.worker import command_guidance
 
     config = Config()
-    config.review.test_workers = workers
+    config.verify.test_workers = workers
     text = command_guidance(config)
     assert "Grep, Glob and Read tools" in text
     assert (expected in text) if expected else "-n" not in text

@@ -32,8 +32,24 @@ class BrowserConfig(Strict):
 
 class ReviewConfig(Strict):
     max_passes: int = Field(default=5, ge=1, le=20)
-    timeout: float = Field(default=600, ge=5, le=1800)
-    worker_timeout: float = Field(default=3600, ge=30, le=14400)
+    # ChatGPT's extended reasoning on a large PR can take well over ten minutes.
+    timeout: float = Field(default=1800, ge=5, le=1800)
+    # One Claude turn, including the project's full checks.
+    worker_timeout: float = Field(default=7200, ge=30, le=28800)
+
+
+class VerifyConfig(Strict):
+    """How the worker runs a project's own checks (see toolchain.py)."""
+
+    # Extra tool directories, searched before the usual per-user toolchains.
+    path: list[str] = Field(default_factory=list)
+    # Extra environment variables for every check.
+    env: dict[str, str] = Field(default_factory=dict)
+    # Repository path -> shell command that prepares its environment, for example
+    # "source /cvmfs/sw.hsf.org/key4hep/setup.sh" or "source ~/miniforge3/bin/activate ana".
+    # It runs outside the sandbox before the worker edits anything; it must not source
+    # files from the repository, which the worker may change.
+    setup: dict[str, str] = Field(default_factory=dict)
     # Parallelism for full test runs when the project's runner supports it: "auto" (all
     # CPUs), a worker count, or "off".
     test_workers: Literal["auto", "off"] | Annotated[int, Field(ge=1, le=1024)] = "auto"
@@ -53,6 +69,7 @@ class Config(Strict):
     reviewer: ReviewerConfig = Field(default_factory=ReviewerConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
+    verify: VerifyConfig = Field(default_factory=VerifyConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
     @classmethod

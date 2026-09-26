@@ -123,6 +123,8 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
     elif kind == "tests_reported":
         texts = [f"Checks {'PASS' if event.get('passed') else 'FAIL'}"]
         texts += [f"  {shorten(test, limit)}" for test in event.get("tests", [])]
+    elif kind == "push_started":
+        texts = [f"Pushing commit {str(event.get('commit', ''))[:10]}"]
     elif kind == "fixes_pushed":
         texts = [f"Commit {str(event.get('commit', ''))[:10]} pushed"]
     elif kind == "diff_capture_failed":

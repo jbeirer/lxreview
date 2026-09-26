@@ -27,6 +27,7 @@ FORBIDDEN = re.compile(
 SANDBOX_PLACEHOLDERS = (
     ".bash_profile",
     ".bashrc",
+    ".claude",
     ".claude/agents",
     ".claude/commands",
     ".claude/hooks",
@@ -39,9 +40,11 @@ SANDBOX_PLACEHOLDERS = (
     ".claude/settings.local.json",
     ".claude/skills",
     ".claude/workflows",
+    ".codex",
     ".gitconfig",
     ".gitmodules",
     ".idea",
+    ".lfsconfig",
     ".mcp.json",
     ".profile",
     ".ripgreprc",
@@ -151,6 +154,74 @@ class Repository:
                 Category.UNSAFE, "Local and upstream branch names must match for a normal push"
             )
 
+    def configured(self, key: str) -> bool:
+        result = run(
+            [self.git, "config", "--type=bool", "--get", key],
+            self.paths,
+            cwd=self.path,
+            timeout=60,
+            check=False,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "true"
+
+    def publish(self, commit: str, base: str, env: dict[str, str]) -> str:
+        """Push the worker's commit from outside the sandbox and return what was pushed.
+
+        The worker commits inside the sandbox (running the repository's commit hooks
+        there); LXReview then signs the commit if the user's Git config asks for signed
+        commits, uploads Git LFS objects, and pushes the exact branch refspec with the
+        user's normal credentials (SSH agent, keychain or credential helper). Pre-push
+        hooks are not run: they could execute files the worker was able to change.
+        """
+        if self.head() != commit:
+            raise LXError(Category.UNSAFE, "HEAD is not the commit the worker reported")
+        if self.call("rev-list", "--count", f"{base}..{commit}") != "1" or (
+            self.call("rev-parse", f"{commit}^") != base
+        ):
+            raise LXError(
+                Category.UNSAFE, "Publication must add exactly one commit to the reviewed head"
+            )
+        if self.call("status", "--porcelain"):
+            raise LXError(Category.UNSAFE, "Uncommitted changes remain after publication")
+        self.check_push_policy()
+        if self.configured("commit.gpgsign"):
+            run(
+                [self.git, "commit", "--amend", "--no-edit", "--no-verify", "--gpg-sign"],
+                self.paths,
+                cwd=self.path,
+                timeout=120,
+                env=env,
+            )
+            commit = self.head()
+        _, remote, refspec = self.push_command()[1:]
+        try:
+            if self._lfs() and self.call("lfs", "ls-files", "--name-only"):
+                run(
+                    [self.git, "lfs", "push", remote, commit],
+                    self.paths,
+                    cwd=self.path,
+                    timeout=1800,
+                    env=env,
+                )
+            run(
+                [self.git, "push", "--no-verify", remote, refspec],
+                self.paths,
+                cwd=self.path,
+                timeout=600,
+                env=env,
+            )
+        except LXError as exc:
+            raise LXError(
+                Category.UNAVAILABLE,
+                f"Push failed; commit {commit[:10]} exists only locally. "
+                "Run lxreview logs for details, push it yourself, then resume",
+            ) from exc
+        return commit
+
+    def _lfs(self) -> bool:
+        attributes = self.path / ".gitattributes"
+        return attributes.is_file() and "filter=lfs" in attributes.read_text(errors="replace")
+
     def push_command(self) -> list[str]:
         """The only push the worker may run: the current branch to its upstream, by refspec.
 
@@ -179,8 +250,6 @@ class Repository:
             )
         self.check_push_policy()
         branch = self.call("symbolic-ref", "--short", "HEAD")
-        if branch in ("main", "master"):
-            raise LXError(Category.UNSAFE, "Use a PR feature branch")
         upstream = self.call("rev-parse", "--abbrev-ref", "@{upstream}")
         remote, ref = upstream.split("/", 1)
         remote_url = self.call("remote", "get-url", remote)
@@ -193,6 +262,14 @@ class Repository:
                 "Use a GitHub remote without embedded credentials or custom remote helpers",
             )
         repo_slug = "/".join(target.split("/")[3:5])
+        pushed_slug = re.sub(
+            r"\.git$", "", re.split(r"github\.com[/:]", remote_url, maxsplit=1)[-1]
+        )
+        # A fork's main branch may carry a PR; the base repository's main never may.
+        if ref in ("main", "master") and pushed_slug.lower() == repo_slug.lower():
+            raise LXError(
+                Category.UNSAFE, "Use a PR feature branch, not the base repository's main"
+            )
         # Query the target repo's PR ref, not a potentially unrelated local upstream.
         pr = target.rsplit("/", 1)[1]
         head = self.head()
