@@ -11,7 +11,6 @@ from pathlib import Path
 import httpx
 from aiohttp import web
 
-from ..config import AGENTIFY_VERSION
 from ..contracts import Health, ReviewRequest, ReviewResponse
 from ..errors import Category, LXError
 from ..paths import Paths, lock
@@ -29,7 +28,9 @@ OPERATIONS = {
 }
 
 
-def application(session, token: str, expires: float, lock_path: Path) -> web.Application:
+def application(
+    session, token: str, expires: float, lock_path: Path, metadata: dict
+) -> web.Application:
     async def dispatch(request: web.Request) -> web.Response:
         if time.time() >= expires or not hmac.compare_digest(
             request.headers.get("Authorization", "").encode(), f"Bearer {token}".encode()
@@ -50,14 +51,9 @@ def application(session, token: str, expires: float, lock_path: Path) -> web.App
                 raise ValueError("Invalid arguments")
             with lock(lock_path):
                 if op == "review":
-                    result = await WebReviewer(
-                        session,
-                        {
-                            "backend": "agentify-web",
-                            "provider": "chatgpt",
-                            "agentify": AGENTIFY_VERSION,
-                        },
-                    ).review(ReviewRequest.model_validate(data))
+                    result = await WebReviewer(session, metadata).review(
+                        ReviewRequest.model_validate(data)
+                    )
                 elif op == "query":
                     prompt, timeout = data["prompt"], float(data["timeout"])
                     if (

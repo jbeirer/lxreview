@@ -4,13 +4,14 @@ import os
 import platform
 import socket
 import stat
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import psutil
 
 from . import __version__
 from .backend import browser
-from .config import AGENTIFY_VERSION, CHROME_VERSION, NODE_VERSION, Config
+from .config import CHROME_VERSION, Config
 from .errors import LXError
 from .install.claude import COMMANDS
 from .paths import Paths, lock
@@ -31,7 +32,7 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
     )
     violations = [
         str(p.relative_to(paths.root))
-        for d in ("secrets", "state/agentify", "state/bridge")
+        for d in ("secrets", "state/browser", "state/bridge")
         for p in (paths.root / d).rglob("*")
         if not p.is_symlink() and p.stat().st_mode & 0o077
     ]
@@ -155,69 +156,39 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
             )
     local_host = config.mode == "local-browser" and config.role == "host"
     if not local_host:
-        for name, path, expected in (
-            ("Node", paths.root / "runtime/node/bin/node", NODE_VERSION),
-            (
-                "Chrome",
-                Path(config.browser.chrome),
-                CHROME_VERSION
-                if Path(config.browser.chrome).is_relative_to(paths.root / "runtime/chrome")
-                else "",
-            ),
-        ):
-            try:
-                result = run(
-                    [str(path), "--version"],
-                    paths,
-                    check=False,
-                    timeout=10,
-                    env=environment(paths, desktop=True),
-                )
-                add(
-                    name,
-                    result.returncode == 0 and (not expected or expected in result.stdout),
-                    f"Executable version matches {expected}"
-                    if expected
-                    else "External browser executable responds",
-                )
-            except (LXError, OSError, TimeoutError):
-                add(
-                    name, False, "Executable failed; run lxreview update to repair managed runtimes"
-                )
+        chrome = Path(config.browser.chrome)
+        expected = CHROME_VERSION if chrome.is_relative_to(paths.root / "runtime/chrome") else ""
         try:
-            package = json.loads(
-                (
-                    paths.root / "runtime/agentify/node_modules/@agentify/desktop/package.json"
-                ).read_text()
-            )
-            add(
-                "Agentify installation",
-                package["version"] == AGENTIFY_VERSION,
-                f"Installed package must match pinned {AGENTIFY_VERSION}",
-            )
-        except (OSError, ValueError, KeyError):
-            add("Agentify installation", False, "Run lxreview setup")
-        try:
-            runtime = json.loads((paths.root / "state/runtime.json").read_text())
-            from importlib.resources import files
-
-            expected = json.loads(
-                files("lxreview.resources").joinpath("agentify-package-lock.json").read_text()
-            )["packages"]["node_modules/electron"]["version"]
             result = run(
-                [runtime["electron"], "-e", "process.stdout.write(process.versions.electron)"],
+                [str(chrome), "--version"],
                 paths,
                 check=False,
                 timeout=10,
-                env={**environment(paths, desktop=True), "ELECTRON_RUN_AS_NODE": "1"},
+                env=environment(paths, desktop=True),
             )
             add(
-                "Electron host",
-                result.returncode == 0 and result.stdout.strip() == expected,
-                f"Native host must report locked Electron {expected}",
+                "Chrome",
+                result.returncode == 0 and (not expected or expected in result.stdout),
+                f"Executable version matches {expected}"
+                if expected
+                else "External browser executable responds",
             )
-        except (LXError, OSError, ValueError, KeyError, TimeoutError):
-            add("Electron host", False, "Native Electron failed; run lxreview update to repair")
+        except (LXError, OSError, TimeoutError):
+            add(
+                "Chrome", False, "Executable failed; run lxreview update to repair managed runtimes"
+            )
+        try:
+            add("Playwright", True, f"Playwright {version('playwright')} drives Chrome over a pipe")
+        except PackageNotFoundError:
+            add("Playwright", False, "Playwright is missing; reinstall LXReview")
+        try:
+            add(
+                "Browser service",
+                Supervisor(paths, config).status("browser"),
+                "Run lxreview start",
+            )
+        except LXError as exc:
+            add("Browser service", False, str(exc))
         if platform.system() == "Linux" and Path(config.browser.chrome).is_file():
             try:
                 result = run([binary("ldd"), config.browser.chrome], paths, check=False)
@@ -244,7 +215,7 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
         with lock(paths.root / "state/reviewer.lock"):
             session = browser(paths, config)
             health = await session.health()
-            add("SSH bridge" if local_host else "Agentify / ChatGPT", health.ready, health.detail)
+            add("SSH bridge" if local_host else "Browser / ChatGPT", health.ready, health.detail)
             tabs = await session.sessions()
             add(
                 "Reviewer single-session",
@@ -266,7 +237,8 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
     except (LXError, TimeoutError) as exc:
         add("Reviewer", False, str(exc))
     # Inspect only managed ports, and never infer safety when the OS denies inspection.
-    ports = set() if local_host else {config.browser.debug_port}
+    # The browser service listens on a private unix socket, never on TCP.
+    ports = set()
     if config.mode == "lxplus-browser":
         ports.add(5900 + config.runtime.display)
     if local_host:
@@ -274,33 +246,31 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
             ports.add(json.loads((paths.root / "state/bridge/connection.json").read_text())["port"])
         except (OSError, ValueError, KeyError):
             pass
-    try:
-        state = json.loads((paths.root / "state/agentify/state.json").read_text())
-        ports.add(state["port"])
-    except (OSError, ValueError, KeyError):
-        pass
-    try:
-        listeners = [
-            c
-            for c in psutil.net_connections(kind="tcp")
-            if c.status == "LISTEN" and c.laddr and c.laddr.port in ports
-        ]
-        unsafe = [
-            c.laddr.ip for c in listeners if c.laddr and c.laddr.ip not in ("127.0.0.1", "::1")
-        ]
-        add(
-            "Loopback listeners",
-            bool(ports) and {c.laddr.port for c in listeners if c.laddr} == ports and not unsafe,
-            "All managed listeners must be present and loopback-only"
-            if not unsafe
-            else "Unsafe network binding detected; stop services",
-        )
-    except (psutil.AccessDenied, PermissionError):
-        add(
-            "Loopback listeners",
-            False,
-            "OS denied socket inspection; bindings could not be verified",
-        )
+    if not ports:
+        add("Loopback listeners", True, "No managed TCP listeners on this machine")
+    else:
+        try:
+            listeners = [
+                c
+                for c in psutil.net_connections(kind="tcp")
+                if c.status == "LISTEN" and c.laddr and c.laddr.port in ports
+            ]
+            unsafe = [
+                c.laddr.ip for c in listeners if c.laddr and c.laddr.ip not in ("127.0.0.1", "::1")
+            ]
+            add(
+                "Loopback listeners",
+                {c.laddr.port for c in listeners if c.laddr} == ports and not unsafe,
+                "All managed listeners must be present and loopback-only"
+                if not unsafe
+                else "Unsafe network binding detected; stop services",
+            )
+        except (psutil.AccessDenied, PermissionError):
+            add(
+                "Loopback listeners",
+                False,
+                "OS denied socket inspection; bindings could not be verified",
+            )
     add(
         "Exact host",
         config.role == "workstation" or config.runtime.host == socket.getfqdn(),

@@ -59,13 +59,14 @@ def output(value, machine=False):
 @app.command()
 def version():
     """Show package and pinned runtime versions."""
-    from .config import AGENTIFY_VERSION, CHROME_VERSION, NODE_VERSION
+    from importlib.metadata import version as installed
+
+    from .config import CHROME_VERSION
 
     output(
         {
             "lxreview": __version__,
-            "agentify": AGENTIFY_VERSION,
-            "node": NODE_VERSION,
+            "playwright": installed("playwright"),
             "chrome": CHROME_VERSION,
         }
     )
@@ -467,6 +468,12 @@ def report(run_id: str, output_file: Path | None = typer.Option(None, "--output"
         typer.echo(text)
 
 
+def _launcher(paths: Paths) -> str:
+    """The launcher as users can paste it; PATH is never modified, so bare lxreview fails."""
+    home, path = str(Path.home()), str(paths.executable)
+    return "~" + path[len(home) :] if path.startswith(home + "/") else path
+
+
 def _login_steps(paths: Paths, config: Config) -> None:
     """Print the VNC login walkthrough. Commands are soft-wrapped so they copy as one line."""
     import getpass
@@ -510,7 +517,7 @@ def _login_steps(paths: Paths, config: Config) -> None:
     if sys.stdout.isatty() and password.is_file():
         command(password.read_text().strip(), "bold yellow")
     else:
-        note(f"Display it on {host} with: lxreview desktop password")
+        note(f"Display it on {host} with: {_launcher(paths)} desktop password")
     step(4, "Log in to ChatGPT in the Chrome window, as you normally would.")
     note("Complete any CAPTCHA or MFA yourself. LXReview never sees your ChatGPT password.")
     console.print()
@@ -535,7 +542,8 @@ def login(timeout: int = 600):
     else:
         starting = "Connecting to the paired workstation…"
         where = "in the Chrome window on your paired workstation"
-    if not (config.mode == "local-browser" and config.role == "host"):
+    local_host = config.mode == "local-browser" and config.role == "host"
+    if not local_host:
         with lock(paths.root / "state/setup.lock"):
             launch(paths, config)
 
@@ -554,6 +562,22 @@ def login(timeout: int = 600):
             else:
                 console.print(Text(f"Log in to ChatGPT {where}.", style="bold"))
 
+        def service_stopped():
+            # A browser service that crashed on startup must not leave login spinning.
+            supervisor = Supervisor(paths, config)
+            if local_host or supervisor.status("browser"):
+                return
+            unit = supervisor.unit("browser")
+            raise LXError(
+                Category.UNAVAILABLE,
+                "The browser service stopped during startup; run lxreview doctor"
+                + (
+                    f" or read journalctl --user -u {unit}"
+                    if config.runtime.supervisor == "systemd"
+                    else ""
+                ),
+            )
+
         async def retry(operation, *transient):
             while True:
                 try:
@@ -561,6 +585,7 @@ def login(timeout: int = 600):
                 except LXError as exc:
                     if exc.category not in transient or time.monotonic() >= end:
                         raise
+                service_stopped()
                 await asyncio.sleep(3)
 
         with console.status(Text(starting)) as status:
@@ -605,6 +630,10 @@ def login(timeout: int = 600):
                     await asyncio.sleep(3)
             finally:
                 reminder.cancel()
+            if shown:
+                # After a manual login ChatGPT may land on a normal chat; test in a fresh one.
+                await session.new_conversation()
+                await session.ensure_ready()
             status.update(Text("Checking that ChatGPT replies…"))
             marker = "LXREVIEW_LOGIN_" + secrets.token_hex(6)
             response = await session.query(f"Reply exactly {marker}", 60)
@@ -624,7 +653,7 @@ def login(timeout: int = 600):
                 style="dim",
             )
         )
-    console.print(Text.assemble("Next: ", ("lxreview doctor", "bold")))
+    console.print(Text.assemble("Next: ", (f"{_launcher(paths)} doctor", "bold")), soft_wrap=True)
 
 
 @app.command()
@@ -816,6 +845,26 @@ def service_exec(name: str):
 
     paths, config = context()
     launch(paths, config, name)
+
+
+@app.command(hidden=True)
+def browser_server():
+    from .backend import metadata
+    from .browser.service import serve
+
+    paths, config = context()
+    os.umask(0o077)
+
+    async def work():
+        task = asyncio.create_task(serve(paths, config, metadata(config)))
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            asyncio.get_running_loop().add_signal_handler(sig, task.cancel)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(work())
 
 
 @app.command(hidden=True)

@@ -8,17 +8,15 @@ description = "Independent AI review loops for LXPLUS development"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-dependencies = ["typer>=0.16,<1", "pydantic>=2.11,<3", "httpx>=0.28,<1", "rich>=14,<16", "mcp>=2.2,<3", "tomli-w>=1.2,<2", "psutil>=7,<8", "aiohttp>=3.12,<4"]
+dependencies = ["typer>=0.16,<1", "pydantic>=2.11,<3", "httpx>=0.28,<1", "rich>=14,<16", "mcp>=2.2,<3", "tomli-w>=1.2,<2", "psutil>=7,<8", "aiohttp>=3.12,<4", "playwright>=1.55,<2"]
 [project.scripts]
 lxreview = "lxreview.cli:main"
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12", "mypy>=1.16", "types-psutil"]
-[project.optional-dependencies]
-playwright = ["playwright>=1.55,<2"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["live: requires explicit opt-in and human browser login"]
+markers = ["live: requires explicit opt-in and human browser login", "browser: needs a Chromium; opt in with LXREVIEW_BROWSER_TESTS=1"]
 [tool.ruff]
 line-length = 100
 [tool.ruff.lint]

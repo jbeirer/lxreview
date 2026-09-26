@@ -15,14 +15,14 @@ In a new Claude Code conversation:
 /review-loop https://github.com/owner/repository/pull/123
 ```
 
-The installer requires `uv` and installs a private Python environment, Node, Chrome and Agentify under `~/.lxreview`. It never modifies shell startup files or PATH. Use the absolute executable path (shown above); `lxreview` below abbreviates that path. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
+The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. It never modifies shell startup files or PATH. Use the absolute executable path (shown above); `lxreview` below abbreviates that path. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
 
 ## Two browser placements
 
 ```mermaid
 flowchart LR
   subgraph Workstation
-    Chrome --> Agentify --> Relay[Authenticated operation relay]
+    Chrome --> Playwright[LXReview browser service] --> Relay[Authenticated operation relay]
   end
   Relay -->|SSH reverse tunnel, loopback only| MCP[LXPLUS reviewer MCP]
   MCP --> Worker[Persistent Claude worker and repository]
@@ -40,18 +40,18 @@ lxreview pair <printed-code>
 lxreview login
 ```
 
-Pairing codes last ten minutes. Relay credentials last at most eight hours; pair again for a new session. SSH authentication uses your existing SSH/Kerberos setup; authenticate interactively first if BatchMode cannot connect. Neither raw CDP nor the Agentify token is forwarded.
+Pairing codes last ten minutes. Relay credentials last at most eight hours; pair again for a new session. SSH authentication uses your existing SSH/Kerberos setup; authenticate interactively first if BatchMode cannot connect. Chrome's debugging protocol is never exposed or forwarded.
 
 ```mermaid
 flowchart LR
   subgraph Exact_LXPLUS_host
     Worker[Persistent Claude worker] --> Reviewer[Reviewer contract]
-    Reviewer --> Agentify --> Chrome[Chrome on private VNC desktop]
+    Reviewer --> Service[LXReview browser service] --> Chrome[Chrome on private VNC desktop]
   end
   Laptop[Workstation VNC viewer] -. one-time normal login .-> Chrome
 ```
 
-LXPLUS-browser mode survives ordinary workstation disconnection, subject to host supervision policy. It cannot survive node reboot/drain. `login` walks you through the SSH tunnel, a VNC viewer and the generated VNC password, then waits until ChatGPT is ready. It skips these steps if you are already logged in. `lxreview desktop connect` prints the steps again, and `lxreview desktop password` shows the password. The password is shown only in an interactive terminal. Never transfer Chrome profiles between users.
+LXPLUS-browser mode survives ordinary workstation disconnection, subject to host supervision policy. It cannot survive node reboot/drain. `login` walks you through the SSH tunnel, a VNC viewer and the generated VNC password, then waits until ChatGPT is ready. Every review opens a fresh ChatGPT Temporary Chat, so ChatGPT memory and chat history never carry context between reviews, and review chats do not appear in your ChatGPT history. It skips these steps if you are already logged in. `lxreview desktop connect` prints the steps again, and `lxreview desktop password` shows the password. The password is shown only in an interactive terminal. Never transfer Chrome profiles between users.
 
 ## Run lifecycle
 
@@ -68,7 +68,7 @@ lxreview resume <run-id>
 
 Closing the initiating Claude conversation does not cancel a run. Use `/review-status`, `/review-show`, `/review-stop`, and `/review-resume` in any new Claude conversation on the same host. `watch` renders a timeline of reviewer passes, accepted/rejected findings, edits, commands, tests and pushes (`--raw` prints the redacted JSON events). It is not a live embedding of another Claude conversation. Ctrl-C stops watching only.
 
-Before each independent review, the working tree must be clean and local HEAD, upstream feature branch and GitHub PR ref must agree (LXReview waits briefly for GitHub to update the PR ref after a push). The effective `push.default` must be `simple`, `upstream` or `current`; if your global setting is `matching`, run `git config push.default simple` in the repository. Pushes need an HTTPS GitHub remote with a credential helper; SSH agent/key authentication is unavailable inside the worker sandbox. Every review starts a fresh conversation in the same managed session. Previous findings are never sent to the reviewer. Claude evaluates substantial findings, edits and tests without network or Git metadata writes, then commits and pushes in a separate restricted turn. The initial test policy supports pytest; other build systems require a policy extension. A push failure stops the run. Final-pass issues produce `MAX_PASSES` without unreviewed edits. An inaccessible or malformed review never counts as success.
+Before each independent review, the working tree must be clean and local HEAD, upstream feature branch and GitHub PR ref must agree (LXReview waits briefly for GitHub to update the PR ref after a push). The effective `push.default` must be `simple`, `upstream` or `current`; if your global setting is `matching`, run `git config push.default simple` in the repository. Pushes need an HTTPS GitHub remote with a credential helper; SSH agent/key authentication is unavailable inside the worker sandbox. Every review starts a fresh Temporary Chat in the same managed browser tab. Previous findings are never sent to the reviewer. Claude evaluates substantial findings, edits and tests without network or Git metadata writes, then commits and pushes in a separate restricted turn. The initial test policy supports pytest; other build systems require a policy extension. A push failure stops the run. Final-pass issues produce `MAX_PASSES` without unreviewed edits. An inaccessible or malformed review never counts as success.
 
 State and redacted events live under `~/.lxreview/state/runs/<id>`. Verbatim reviews, explicit evaluations, diffs, test reports and metadata live under the repository's Git common directory, `review-loop/<id>`. Worktrees are supported. Hidden model reasoning is excluded from events. Resume requires a clean, pushed checkpoint; interrupted pass artifacts are retained.
 

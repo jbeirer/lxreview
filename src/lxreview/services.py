@@ -1,4 +1,3 @@
-import json
 import os
 import socket
 from pathlib import Path
@@ -102,15 +101,6 @@ def service_exec(paths: Paths, config: Config, name: str) -> None:
         env["HOME"] = str(paths.root / "state/vnc")
         argv = desktop_command(paths, config)
     elif name == "browser":
-        # Never attach Agentify to an unrelated existing CDP listener.
-        with socket.socket() as probe:
-            try:
-                probe.bind(("127.0.0.1", config.browser.debug_port))
-            except OSError as exc:
-                raise LXError(
-                    Category.BUSY,
-                    "Configured CDP port is already occupied; inspect it before starting",
-                ) from exc
         if config.mode == "lxplus-browser":
             import time
 
@@ -122,20 +112,10 @@ def service_exec(paths: Paths, config: Config, name: str) -> None:
                         "Virtual desktop did not become ready; run desktop status",
                     )
                 time.sleep(0.2)
-        runtime = json.loads((paths.root / "state/runtime.json").read_text())
-        env["AGENTIFY_DESKTOP_CHROME_BIN"] = config.browser.chrome
-        env["AGENTIFY_DESKTOP_CHROME_DEBUG_PORT"] = str(config.browser.debug_port)
-        env["AGENTIFY_DESKTOP_CHROME_PROFILE_MODE"] = config.browser.profile
-        if config.mode == "lxplus-browser":
             env["DISPLAY"] = f":{config.runtime.display}"
         elif "DISPLAY" in os.environ:
             env["DISPLAY"] = os.environ["DISPLAY"]
-        argv = [
-            runtime["electron"],
-            str(paths.root / "runtime/agentify/node_modules/@agentify/desktop"),
-            "--browser-backend",
-            "chrome-cdp",
-        ]
+        argv = [str(paths.executable), "browser-server"]
     else:
         raise LXError(Category.CONFIG, "Unknown service")
     os.umask(0o077)

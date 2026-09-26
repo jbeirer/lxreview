@@ -112,7 +112,7 @@ class LoginSession:
 
         if self.stalls > 0:
             self.stalls -= 1
-            raise LXError(Category.UNAVAILABLE, "Agentify is not responding yet")
+            raise LXError(Category.UNAVAILABLE, "Browser service is not responding yet")
         return []
 
     async def new_conversation(self):
@@ -120,7 +120,7 @@ class LoginSession:
 
         if self.stalls == 0:
             self.stalls = -1
-            raise LXError(Category.TIMEOUT, "Agentify did not answer /navigate in time")
+            raise LXError(Category.TIMEOUT, "Browser service did not answer in time")
 
     async def ensure_ready(self):
         from lxreview.errors import Category, LXError
@@ -133,7 +133,7 @@ class LoginSession:
         return prompt.removeprefix("Reply exactly ")
 
 
-def login_output(paths, monkeypatch, misses, stalls=None):
+def run_login(paths, monkeypatch, misses, stalls=None, running=True):
     import asyncio
 
     from lxreview.config import Config
@@ -149,7 +149,12 @@ def login_output(paths, monkeypatch, misses, stalls=None):
     monkeypatch.setattr("lxreview.backend.browser", lambda *a: session)
     real_sleep = asyncio.sleep
     monkeypatch.setattr(asyncio, "sleep", lambda seconds: real_sleep(0))
-    result = runner.invoke(app, ["login"])
+    monkeypatch.setattr("lxreview.cli.Supervisor.status", lambda self, name: running)
+    return runner.invoke(app, ["login"])
+
+
+def login_output(paths, monkeypatch, misses, stalls=None):
+    result = run_login(paths, monkeypatch, misses, stalls)
     assert result.exit_code == 0, result.output
     return result.stdout
 
@@ -168,6 +173,8 @@ def test_login_shows_copyable_steps_once(paths, monkeypatch):
     assert "vncsecret" not in text
     assert "lxreview desktop password" in text
     assert "ChatGPT login verified" in text
+    # PATH is never modified, so every pasteable command names the launcher itself.
+    assert f"Next: {paths.executable} doctor" in text
 
 
 def test_login_skips_steps_when_already_logged_in(paths, monkeypatch):
@@ -184,3 +191,9 @@ def test_login_shows_steps_while_a_cold_browser_stalls(paths, monkeypatch):
     text = login_output(paths, monkeypatch, misses=0, stalls=3)
     assert text.count("ssh -N") == 1
     assert "ChatGPT login verified" in text
+
+
+def test_login_stops_waiting_when_the_browser_service_died(paths, monkeypatch):
+    result = run_login(paths, monkeypatch, misses=0, stalls=50, running=False)
+    assert result.exit_code == 1
+    assert "browser service stopped during startup" in str(result.exception)

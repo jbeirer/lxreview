@@ -103,7 +103,7 @@ def test_environment_does_not_leak(paths, monkeypatch):
     monkeypatch.setenv("NODE_PATH", "/bad")
     env = environment(paths, desktop=True)
     assert not {"ANTHROPIC_API_KEY", "PYTHONPATH", "NODE_PATH"} & env.keys()
-    assert env["AGENTIFY_DESKTOP_BROWSER_BACKEND"] == "chrome-cdp"
+    assert env["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] == "1"
 
 
 def test_redaction_drops_hidden_reasoning():
@@ -316,14 +316,9 @@ def test_installation_root_is_normalized_before_safety_checks(tmp_path):
         paths.ensure()
 
 
-def test_npm_config_is_contained(paths):
+def test_browser_state_is_contained(paths):
     env = environment(paths, desktop=True)
-    for name in (
-        "npm_config_userconfig",
-        "npm_config_globalconfig",
-        "npm_config_prefix",
-        "npm_config_cache",
-    ):
+    for name in ("PLAYWRIGHT_BROWSERS_PATH", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
         assert env[name].startswith(str(paths.root) + "/")
 
 

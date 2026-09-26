@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+  A stand-in for chatgpt.com that reproduces only the markup LXReview relies on, as
+  observed on 2026-09-26. Scenarios: ?scenario=logged-out|captcha|error|multi|mangle
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ChatGPT</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    main { max-width: 700px; margin: 0 auto; padding: 16px; }
+    [data-chatgpt-composer] { display: flex; gap: 8px; margin-top: 24px; }
+    .ProseMirror { flex: 1; min-height: 26px; border: 1px solid #999; padding: 4px; }
+  </style>
+</head>
+<body>
+  <header><button aria-label="Open profile menu" id="profile">J</button></header>
+  <main>
+    <div id="thread"></div>
+    <form data-chatgpt-composer onsubmit="return false">
+      <button type="button" aria-label="Add files and more">+</button>
+      <div class="ProseMirror" contenteditable="true" aria-label="Ask ChatGPT" id="composer"></div>
+      <button type="button" aria-label="Select ChatGPT model">Medium</button>
+      <button type="button" aria-label="Send" id="send" disabled>Send</button>
+    </form>
+  </main>
+  <script>
+    const scenario = new URLSearchParams(location.search).get('scenario') || 'normal';
+    const composer = document.getElementById('composer');
+    const send = document.getElementById('send');
+    const thread = document.getElementById('thread');
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    if (scenario === 'logged-out') {
+      document.getElementById('profile').replaceWith(Object.assign(document.createElement('button'), { textContent: 'Log in' }));
+    }
+    if (scenario === 'captcha') {
+      // Only the attribute matters; this URL is never fetched.
+      document.body.append(Object.assign(document.createElement('iframe'), { src: 'about:blank#challenges.cloudflare.com' }));
+    }
+
+    composer.addEventListener('input', () => {
+      if (scenario === 'mangle') composer.textContent = composer.textContent.toUpperCase();
+      send.disabled = !composer.innerText.trim();
+    });
+
+    const replyFor = (text) => {
+      const exact = text.match(/^Reply exactly (\S+)$/);
+      return exact ? exact[1] : 'You said: ' + text;
+    };
+
+    const block = (turn) => {
+      const unit = document.createElement('div');
+      const markdown = document.createElement('div');
+      markdown.dataset.markdownTextStyle = 'assistant-message';
+      unit.append(markdown);
+      turn.append(unit);
+      return markdown;
+    };
+
+    send.addEventListener('click', async () => {
+      const text = composer.innerText.trim();
+      composer.textContent = '';
+      send.disabled = true;
+      send.hidden = true;
+      const turn = document.createElement('div');
+      turn.dataset.turnKey = 'turn-' + thread.children.length;
+      const bubble = document.createElement('div');
+      bubble.dataset.userMessageBubble = 'true';
+      bubble.textContent = text;
+      turn.append(bubble);
+      thread.append(turn);
+      await sleep(300);
+      const words = replyFor(text).split(/(?= )/);
+      const markdown = block(turn);
+      for (const [i, word] of words.entries()) {
+        markdown.textContent += word;
+        await sleep(30);
+        // Longer than the driver's stability window: text alone must not end the wait.
+        if (i === Math.floor(words.length / 2)) await sleep(2500);
+      }
+      if (scenario === 'multi') block(turn).textContent = 'VERDICT: CLEAN';
+      if (scenario === 'error') {
+        turn.append(Object.assign(document.createElement('div'), { textContent: 'Something went wrong while generating the response.' }));
+      } else {
+        const actions = document.createElement('div');
+        for (const label of ['Copy', 'Read aloud', 'Regenerate response']) {
+          const button = Object.assign(document.createElement('button'), { textContent: label[0] });
+          button.setAttribute('aria-label', label);
+          actions.append(button);
+        }
+        turn.append(actions);
+      }
+      send.hidden = false;
+    });
+  </script>
+</body>
+</html>

@@ -30,8 +30,22 @@ async def test_doctor_does_not_infer_mac_supervision_or_missing_listeners(paths,
     checks = {c["check"]: c for c in await diagnose(paths, config, smoke=False)}
     assert checks["Persistence supervisor"]["status"] == "FAIL"
     assert calls[0][0] == "/usr/bin/launchctl"
-    assert checks["Loopback listeners"]["status"] == "FAIL"
+    # The workstation's browser service uses a private socket, so no TCP listener is expected.
+    assert checks["Loopback listeners"]["status"] == "PASS"
     assert "Query round trip" not in checks
+
+
+async def test_doctor_fails_when_an_expected_listener_is_missing(paths, monkeypatch):
+    config = Config()
+    monkeypatch.setattr("lxreview.doctor.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "lxreview.doctor.run",
+        lambda argv, *a, **k: subprocess.CompletedProcess(argv, 1, "", ""),
+    )
+    monkeypatch.setattr("lxreview.doctor.browser", lambda *a: Browser())
+    monkeypatch.setattr("lxreview.doctor.psutil.net_connections", lambda **k: [])
+    checks = {c["check"]: c for c in await diagnose(paths, config, smoke=False)}
+    assert checks["Loopback listeners"]["status"] == "FAIL"
 
 
 async def test_doctor_continues_after_missing_supervisor(paths, monkeypatch):
@@ -50,22 +64,9 @@ async def test_doctor_continues_after_missing_supervisor(paths, monkeypatch):
 
 
 async def test_doctor_checks_actual_runtimes_not_just_record(paths, monkeypatch):
-    from lxreview.config import AGENTIFY_VERSION
-    from lxreview.paths import write_json
-
     config = Config(mode="local-browser", role="workstation")
     config.browser.placement = "local"
     config.browser.chrome = str(paths.root / "runtime/chrome/chrome")
-    write_json(
-        paths.root / "state/runtime.json",
-        {
-            "agentify": AGENTIFY_VERSION,
-            "electron": "/missing/electron",
-        },
-    )
-    package = paths.root / "runtime/agentify/node_modules/@agentify/desktop/package.json"
-    package.parent.mkdir(parents=True)
-    package.write_text('{"version":"0.0.0"}')
     monkeypatch.setattr("lxreview.doctor.binary", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(
         "lxreview.doctor.run",
@@ -74,5 +75,6 @@ async def test_doctor_checks_actual_runtimes_not_just_record(paths, monkeypatch)
     monkeypatch.setattr("lxreview.doctor.browser", lambda *a: Browser())
     monkeypatch.setattr("lxreview.doctor.psutil.net_connections", lambda **k: [])
     checks = {c["check"]: c for c in await diagnose(paths, config, smoke=False)}
-    for name in ("Node", "Chrome", "Electron host", "Agentify installation"):
-        assert checks[name]["status"] == "FAIL"
+    assert checks["Chrome"]["status"] == "FAIL"
+    assert checks["Playwright"]["status"] == "PASS"
+    assert "Node" not in checks

@@ -44,13 +44,9 @@ def environment(paths: Paths, *, desktop: bool = False) -> dict[str, str]:
                 "XDG_CONFIG_HOME": str(paths.root / "state/config"),
                 "XDG_CACHE_HOME": str(paths.root / "cache"),
                 "XDG_DATA_HOME": str(paths.root / "state/data"),
-                "AGENTIFY_DESKTOP_STATE_DIR": str(paths.root / "state/agentify"),
-                "AGENTIFY_DESKTOP_BROWSER_BACKEND": "chrome-cdp",
-                "npm_config_cache": str(paths.root / "cache/npm"),
-                "npm_config_userconfig": str(paths.root / "config/npm-user.rc"),
-                "npm_config_globalconfig": str(paths.root / "config/npm-global.rc"),
-                "npm_config_prefix": str(paths.root / "runtime/node"),
-                "ELECTRON_CACHE": str(paths.root / "cache/electron"),
+                # Chrome is always the pinned executable; Playwright never downloads browsers.
+                "PLAYWRIGHT_BROWSERS_PATH": str(paths.root / "cache/ms-playwright"),
+                "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1",
             }
         )
     return env

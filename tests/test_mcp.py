@@ -34,44 +34,59 @@ async def test_real_mcp_stdio_initialization_and_tool_contract(paths):
             assert not list((paths.root / "state/services").iterdir())
 
 
-async def test_real_mcp_review_against_http_agentify_fixture(paths):
+class FakeChatGPT:
+    """Stands in for the Playwright session behind the real browser service."""
+
+    def __init__(self):
+        self.navigations = self.queries = 0
+        self.stopped = False
+
+    async def new_conversation(self):
+        self.navigations += 1
+
+    async def ensure_ready(self):
+        pass
+
+    async def query(self, prompt, timeout):
+        self.queries += 1
+        return "Full review\nVERDICT: CLEAN"
+
+    async def sessions(self):
+        return [{"key": "chatgpt-reviewer"}]
+
+    async def shutdown(self):
+        self.stopped = True
+
+
+async def test_real_mcp_review_through_browser_service():
+    import asyncio
     import json
-    import socket
+    import shutil
+    import stat
+    import tempfile
+    from pathlib import Path
 
-    import httpx
-    from aiohttp import web
-    from test_agentify import FakeAgentify
+    from lxreview.browser.service import serve
+    from lxreview.paths import Paths
 
-    from lxreview.paths import atomic_write, write_json
-
-    fake = FakeAgentify()
-
-    async def dispatch(request):
-        payload = await request.read()
-        result = fake.handle(
-            httpx.Request(
-                request.method, str(request.url), headers=dict(request.headers), content=payload
-            )
-        )
-        return web.json_response(result.json(), status=result.status_code)
-
-    app = web.Application()
-    app.router.add_route("*", "/{path:.*}", dispatch)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    await web.SockSite(runner, sock).start()
-    write_json(paths.root / "state/agentify/state.json", {"port": port, "serverId": fake.server_id})
-    atomic_write(paths.root / "state/agentify/token.txt", "private-token")
+    # A short root keeps the unix socket path within the macOS sockaddr limit.
+    paths = Paths(Path(tempfile.mkdtemp(prefix="lx", dir="/tmp")) / "root")
+    paths.ensure()
     Config().save(paths)
-    params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "lxreview.cli", "mcp"],
-        env={**os.environ, "LXREVIEW_HOME": str(paths.root)},
-    )
+    fake = FakeChatGPT()
+    service = asyncio.create_task(serve(paths, Config(), {"backend": "chatgpt-web"}, fake))
+    socket_path = paths.root / "state/browser/api.sock"
     try:
+        for _ in range(100):
+            if (paths.root / "state/browser/connection.json").exists():
+                break
+            await asyncio.sleep(0.05)
+        assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "lxreview.cli", "mcp"],
+            env={**os.environ, "LXREVIEW_HOME": str(paths.root)},
+        )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as client:
                 await client.initialize()
@@ -86,7 +101,11 @@ async def test_real_mcp_review_against_http_agentify_fixture(paths):
                     )
                     data = json.loads(result.content[0].text)
                     assert data["verdict"] == "CLEAN"
-                    assert data["raw"] == fake.response["text"]
-        assert fake.created == 1 and fake.query_count == 2
+                    assert data["metadata"]["backend"] == "chatgpt-web"
+        assert fake.navigations == 2 and fake.queries == 2
+        service.cancel()
+        await asyncio.gather(service, return_exceptions=True)
+        assert fake.stopped and not socket_path.exists()
     finally:
-        await runner.cleanup()
+        service.cancel()
+        shutil.rmtree(paths.root.parent)

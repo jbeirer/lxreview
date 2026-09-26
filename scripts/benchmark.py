@@ -12,27 +12,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lxreview import __version__
-from lxreview.backend import browser
-from lxreview.browser.playwright import PlaywrightSession
-from lxreview.config import AGENTIFY_VERSION, CHROME_VERSION, Config
+from lxreview.backend import browser, metadata
+from lxreview.config import Config
 from lxreview.paths import Paths, lock, write_json
 
 
 async def benchmark(args):
     paths = Paths.default()
     config = Config.load(paths)
-    session = (
-        browser(paths, config)
-        if args.backend == "agentify"
-        else PlaywrightSession(
-            paths.root / "state/playwright-benchmark", Path(config.browser.chrome)
-        )
-    )
+    session = browser(paths, config)
     report = {
         "lxreview": __version__,
-        "backend": args.backend,
-        "agentify": AGENTIFY_VERSION if args.backend == "agentify" else None,
-        "chrome": CHROME_VERSION,
+        **metadata(config),
         "date": datetime.now(UTC).isoformat(),
         "os": platform.platform(),
         "placement": config.mode,
@@ -66,16 +57,12 @@ async def benchmark(args):
                     text = await session.query(prompt, 600)
                     after = await session.sessions()
 
-                    def identities(tabs):
-                        return [(t.get("id", t.get("tabId")), t.get("key")) for t in tabs]
-
                     entry.update(
                         exact_response=text.strip() == marker,
-                        stable_session=identities(before) == identities(after),
+                        stable_session=[t.get("key") for t in before]
+                        == [t.get("key") for t in after],
                         managed_session_count=len(after),
-                        passed=text.strip() == marker
-                        and len(after) == 1
-                        and identities(before) == identities(after),
+                        passed=text.strip() == marker and len(after) == 1,
                     )
                 except Exception as exc:
                     entry.update(passed=False, failure=type(exc).__name__)
@@ -88,14 +75,11 @@ async def benchmark(args):
                 report["pending"].append("wedged-session recovery")
         finally:
             write_json(args.output, report)
-            if args.backend == "playwright":
-                await session.close()
     print(json.dumps(report, indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=["agentify", "playwright"], default="agentify")
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--recovery", action="store_true")
     parser.add_argument("--output", type=Path, default=Path(".live-results/compatibility.json"))

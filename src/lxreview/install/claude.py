@@ -105,11 +105,7 @@ def uninstall(paths: Paths, config: Config) -> None:
     home = Path(owned["home"])
     file = home / ".claude.json"
     current = json.loads(file.read_text()) if file.exists() else {}
-    # Only records written by earlier versions can disown the registration.
-    if (
-        owned.get("registration_owned", True)
-        and current.get("mcpServers", {}).get("lxreview-reviewer") == owned["registration"]
-    ):
+    if current.get("mcpServers", {}).get("lxreview-reviewer") == owned["registration"]:
         run([config.runtime.claude, "mcp", "remove", "--scope", "user", "lxreview-reviewer"], paths)
     for name in owned["commands"]:
         link = home / ".claude/commands" / f"{name}.md"

@@ -9,8 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .errors import Category, LXError
 from .paths import Paths, atomic_write
 
-AGENTIFY_VERSION = "0.2.4"
-NODE_VERSION = "22.23.3"
 CHROME_VERSION = "154.0.8037.57"
 
 
@@ -19,18 +17,17 @@ class Strict(BaseModel):
 
 
 class ReviewerConfig(Strict):
-    backend: Literal["agentify-web"] = "agentify-web"
+    backend: Literal["chatgpt-web"] = "chatgpt-web"
     provider: Literal["chatgpt"] = "chatgpt"
     model: Literal["default"] = "default"
     reasoning_effort: Literal["default"] = "default"
 
 
 class BrowserConfig(Strict):
-    backend: Literal["agentify"] = "agentify"
+    backend: Literal["playwright"] = "playwright"
     placement: Literal["local", "lxplus"] = "lxplus"
     profile: Literal["isolated", "existing"] = "isolated"
     chrome: str = ""
-    debug_port: int = Field(default=19222, ge=1024, le=65535)
 
 
 class ReviewConfig(Strict):

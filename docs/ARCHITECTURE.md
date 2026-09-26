@@ -1,6 +1,6 @@
 # Architecture
 
-`contracts.py` owns normalized requests, responses, health, reviewer and browser-session protocols. `worker.py` owns the provider-neutral review loop. `reviewer.py` owns independent review semantics. `browser/agentify.py` owns published Agentify endpoints and compatibility handling. `backend.py` is the composition root; neither workflow prompts nor worker logic branch on browser placement.
+`contracts.py` owns normalized requests, responses, health, reviewer and browser-session protocols. `worker.py` owns the provider-neutral review loop. `reviewer.py` owns independent review semantics. `browser/playwright.py` owns the ChatGPT page driver: every selector, the page-state script, prompt readback, submission and completion rules. `browser/service.py` runs that driver in a supervised process that owns Chrome and serves the named operations on a private unix socket. `backend.py` is the composition root; neither workflow prompts nor worker logic branch on browser placement.
 
 `bridge/relay.py` transports named browser operations; a whole review holds the workstation session lock across navigation, readiness and submission. `bridge/ssh.py` owns exact-host pairing and reverse forwarding. `mcp/server.py` exports a stable package-owned stdio API. `process.py` supervises package-scoped services using systemd, tmux under a systemd scope, or launchd. Configuration uses strict TOML/Pydantic; schema 1 is the initial schema and unknown versions fail with an upgrade instruction rather than being rewritten.
 

@@ -93,7 +93,7 @@ class Paths:
             "state",
             "state/runs",
             "state/services",
-            "state/agentify",
+            "state/browser",
             "state/bridge",
             "state/vnc",
             "secrets",

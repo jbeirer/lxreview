@@ -245,7 +245,6 @@ def test_vnc_and_browser_share_private_xauthority(paths, monkeypatch, name):
 
     monkeypatch.setattr("lxreview.services.desktop_command", lambda *a: ["/fake/vnc"])
     monkeypatch.setattr("lxreview.services.Path.exists", lambda p: True)
-    write_json(paths.root / "state/runtime.json", {"electron": "/fake/electron"})
     captured = []
     monkeypatch.setattr("lxreview.services.os.execve", lambda *args: captured.append(args))
     old_mask = __import__("os").umask(0o077)
@@ -254,6 +253,8 @@ def test_vnc_and_browser_share_private_xauthority(paths, monkeypatch, name):
     finally:
         __import__("os").umask(old_mask)
     assert captured[0][2]["XAUTHORITY"] == str(paths.root / "state/vnc/.Xauthority")
+    if name == "browser":
+        assert captured[0][1] == [str(paths.executable), "browser-server"]
 
 
 def test_supervisor_preserves_launch_environment_and_uses_distinct_tmux_servers(paths, monkeypatch):
@@ -298,24 +299,6 @@ def test_supervisor_uses_recorded_kind_after_config_changes(paths, monkeypatch):
     monkeypatch.setattr("lxreview.process.run", run)
     supervisor.stop("browser")
     assert all(argv[0] == "/usr/bin/launchctl" for argv in calls)
-
-
-def test_failed_agentify_update_preserves_existing_runtime(paths, monkeypatch):
-    from lxreview.install import runtime
-
-    old = paths.root / "runtime/agentify"
-    old.mkdir()
-    (old / "working").write_text("old")
-
-    def fail(*args):
-        raise LXError(
-            __import__("lxreview.errors", fromlist=["Category"]).Category.UNAVAILABLE, "npm failed"
-        )
-
-    monkeypatch.setattr(runtime, "_install_agentify", fail)
-    with pytest.raises(LXError):
-        runtime.install_agentify(paths)
-    assert (old / "working").read_text() == "old"
 
 
 @pytest.mark.parametrize("entry", [{}, None, ""])
@@ -382,38 +365,3 @@ def test_stop_unloads_exited_launchd_job(paths, monkeypatch):
     supervisor.stop("browser")
     assert not loaded
     assert any("bootout" in argv for argv in calls)
-
-
-@pytest.mark.parametrize("fallback_ok", [True, False])
-def test_electron_install_script_failure_uses_clean_recovery(paths, monkeypatch, fallback_ok):
-    from lxreview.install import runtime
-
-    prefix = paths.root / "runtime/stage"
-    prefix.mkdir()
-    calls = []
-
-    def run(argv, *args, **kwargs):
-        calls.append(argv)
-        if "ci" in argv:
-            if "--ignore-scripts" in argv and fallback_ok:
-                package = prefix / "node_modules/@agentify/desktop/package.json"
-                package.parent.mkdir(parents=True)
-                package.write_text(json.dumps({"version": runtime.AGENTIFY_VERSION}))
-                return subprocess.CompletedProcess(argv, 0, "", "")
-            return subprocess.CompletedProcess(argv, 1, "", "")
-        if any(arg.endswith("electron/install.js") for arg in argv):
-            native = prefix / "node_modules/electron/dist/electron"
-            native.parent.mkdir(parents=True)
-            native.write_text("native")
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(runtime.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(runtime, "run", run)
-    if fallback_ok:
-        runtime._install_agentify(paths, prefix)
-        assert any(arg.endswith("electron/install.js") for call in calls for arg in call)
-    else:
-        with pytest.raises(LXError, match="recovery failed"):
-            runtime._install_agentify(paths, prefix)
-    assert len([call for call in calls if "ci" in call]) == 3
-    assert "--ignore-scripts" in calls[2]

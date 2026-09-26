@@ -11,7 +11,6 @@ import time
 
 from aiohttp import web
 
-from ..browser.agentify import AgentifyAPI, AgentifySession
 from ..config import Config
 from ..errors import Category, LXError
 from ..paths import Paths, atomic_write, lock, write_json
@@ -155,9 +154,16 @@ async def serve(paths: Paths, config: Config) -> None:
     code = json.loads((paths.root / "state/bridge/local-pairing.json").read_text())
     token = secrets.token_urlsafe(32)
     expires = time.time() + 8 * 3600
-    session = AgentifySession(AgentifyAPI(paths.root / "state/agentify"))
+    from ..backend import browser, metadata
+
     runner = web.AppRunner(
-        application(session, token, expires, paths.root / "state/reviewer.lock"),
+        application(
+            browser(paths, config),
+            token,
+            expires,
+            paths.root / "state/reviewer.lock",
+            metadata(config),
+        ),
         access_log=None,
         shutdown_timeout=2,
     )

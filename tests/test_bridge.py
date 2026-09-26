@@ -21,7 +21,7 @@ class Session:
 async def test_real_http_relay_auth_expiry_and_allowlist(paths):
     session = Session()
     runner = web.AppRunner(
-        application(session, "relay-secret", time.time() + 60, paths.root / "relay.lock")
+        application(session, "relay-secret", time.time() + 60, paths.root / "relay.lock", {})
     )
     await runner.setup()
     import socket
@@ -125,7 +125,9 @@ async def test_entire_remote_review_excludes_local_control(paths):
             return "VERDICT: CLEAN"
 
     lockfile = paths.root / "state/reviewer.lock"
-    runner = web.AppRunner(application(Browser(), "secret", time.time() + 60, lockfile))
+    runner = web.AppRunner(
+        application(Browser(), "secret", time.time() + 60, lockfile, {"backend": "chatgpt-web"})
+    )
     await runner.setup()
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -209,7 +211,7 @@ async def test_relay_proves_identity_before_receiving_bearer(paths, rogue):
 
         app.router.add_route("*", "/{path:.*}", impersonator)
     else:
-        app = application(Session(), token, time.time() + 60, paths.root / "relay.lock")
+        app = application(Session(), token, time.time() + 60, paths.root / "relay.lock", {})
     runner = web.AppRunner(app)
     await runner.setup()
     sock = socket.socket()

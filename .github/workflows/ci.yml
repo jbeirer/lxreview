@@ -31,3 +31,18 @@ jobs:
           uv pip install --python /tmp/lxreview-wheel-smoke/bin/python dist/*.whl
           /tmp/lxreview-wheel-smoke/bin/lxreview version
           /tmp/lxreview-wheel-smoke/bin/lxreview --help
+  browser:
+    # Drives the real Playwright session against a local page that mirrors ChatGPT's markup.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.12.19'
+          python-version: '3.13'
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -m browser
+        env:
+          LXREVIEW_BROWSER_TESTS: '1'
