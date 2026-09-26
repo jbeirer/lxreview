@@ -36,7 +36,7 @@ async def executable() -> str:
 async def chatgpt(tmp_path):
     sessions = []
 
-    async def start(scenario="normal"):
+    async def start(scenario="normal", navigate=True):
         session = PlaywrightSession(
             tmp_path / f"profile-{len(sessions)}",
             await executable(),
@@ -46,7 +46,8 @@ async def chatgpt(tmp_path):
         )
         sessions.append(session)
         await session.open()
-        await session.new_conversation()
+        if navigate:
+            await session.new_conversation()
         return session
 
     yield start
@@ -105,3 +106,9 @@ async def test_closed_tab_is_reopened(chatgpt):
     await session.new_conversation()
     await session.ensure_ready()
     assert len(await session.sessions()) == 1
+
+
+async def test_health_after_a_fresh_start_checks_chatgpt_itself(chatgpt):
+    # The service opens Chrome on a blank tab; the login check must not judge that tab.
+    session = await chatgpt(navigate=False)
+    assert (await session.health()).ready

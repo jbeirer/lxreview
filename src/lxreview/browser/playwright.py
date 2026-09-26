@@ -202,6 +202,9 @@ class PlaywrightSession:
         )
 
     async def health(self) -> Health:
+        # A freshly started service shows a blank tab; judge the login on ChatGPT itself.
+        if not (await self._page()).url.startswith(self.home.split("?")[0]):
+            await self.new_conversation()
         await self.ensure_ready()
         return Health(ready=True, detail="ChatGPT logged in and composer ready")
 
