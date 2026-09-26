@@ -18,7 +18,7 @@ from .git import PullRefPending, Repository
 from .paths import Paths, append_private, atomic_write, lock, private_dir, write_json
 from .process import environment
 from .runs import RunStore
-from .security import PROTECTED, redact
+from .security import redact
 
 
 class Decision(BaseModel):
@@ -76,11 +76,14 @@ async def claude_turn(
             },
             "permissions": {
                 "blockReadsOutsideWorkingDirectories": True,
-                "deny": ["Agent", "Task", "WebFetch", "WebSearch"]
-                + [f"Read(**/{name})" for name in PROTECTED]
-                + [f"Read(**/{name}/**)" for name in PROTECTED]
-                + ["Read(**/.env.*)"],
+                # No Read(**/...) globs: Claude Code merges them into the Bash sandbox, and on
+                # Linux expands them into one mount per matching file (every file under .git),
+                # which overflows the exec argument limit and hides .git from git itself. The
+                # guard hook enforces the protected-path policy for the file tools instead.
+                "deny": ["Agent", "Task", "WebFetch", "WebSearch"],
             },
+            # Commits carry only the user's own identity, with no Claude trailer or link.
+            "attribution": False,
             "disableAllHooks": False,
             "sandbox": {
                 "enabled": True,
@@ -441,7 +444,7 @@ async def execute(
                     paths,
                     config,
                     store,
-                    "Tests passed in the previous turn. Inspect the diff, stage only explicit changed files, create a normal git commit -m and push with exactly `"
+                    "Tests passed in the previous turn. Inspect the diff, stage only explicit changed files, create a normal git commit -m whose message describes the change only, with no Co-Authored-By or other trailers and no mention of Claude or AI, and push with exactly `"
                     + " ".join(repo.push_command())
                     + "`. Stop on any failure. This turn permits Git publication only: no edits, tests, interpreters, hook bypass or force variants. Return the full commit SHA and pushed status.",
                     PublishResult,

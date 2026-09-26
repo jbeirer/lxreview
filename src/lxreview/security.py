@@ -33,6 +33,13 @@ def redact(value):
     return value
 
 
+# Worker commits are the user's own: no co-author trailer, Anthropic address or Claude
+# attribution line. A message may still name files such as CLAUDE.md.
+ATTRIBUTION = re.compile(
+    r"co-authored-by|anthropic\.com|claude\.(?:ai|com)|claude code|(?:generated|written|authored)\s+(?:with|by)\s+\S*\s*claude",
+    re.IGNORECASE,
+)
+
 PROTECTED = {
     ".git",
     ".ssh",
@@ -179,9 +186,11 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
                 return False, "Only `" + " ".join(expected) + "` is allowed"
             return True, ""
         if args[1] == "commit":
-            return len(args) == 4 and args[
-                2
-            ] == "-m", "Only git commit -m with a literal message is allowed"
+            if len(args) != 4 or args[2] != "-m":
+                return False, "Only git commit -m with a literal message is allowed"
+            if ATTRIBUTION.search(args[3]):
+                return False, "Commit messages carry no co-author trailer or Claude attribution"
+            return True, ""
         if args[1] == "add":
             return len(args) > 2 and all(
                 not x.startswith(("-", ":")) and safe_path(x, repo) and not (repo / x).is_dir()

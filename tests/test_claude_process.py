@@ -34,6 +34,9 @@ assert settings['sandbox']['enabled']
 assert settings['sandbox']['failIfUnavailable']
 assert not settings['sandbox']['allowUnsandboxedCommands']
 assert settings['hooks']['PreToolUse'][0]['matcher']=='.*'
+# Glob Read rules expand into one sandbox mount per file on Linux (E2BIG with a large .git).
+assert not any(rule.startswith('Read(') for rule in settings['permissions']['deny'])
+assert settings['attribution'] is False
 sys.stdin.read()
 print(json.dumps({'type':'system','session_id':str(uuid.uuid4())}),flush=True)
 print(json.dumps({'type':'assistant','message':{'content':[{'type':'thinking','thinking':'PRIVATE_REASONING'},{'type':'text','text':'Checking evidence; Bearer private-token'}]}}),flush=True)

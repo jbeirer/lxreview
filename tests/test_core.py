@@ -1,4 +1,5 @@
 import json
+import shlex
 
 import pytest
 
@@ -167,6 +168,7 @@ def test_dangerous_commands_denied(tmp_path, command):
         "git diff -- src/cookie_jar.py",
         "cat .gitignore",
         "git commit -m 'Fix credential parsing'",
+        "git commit -m 'Clarify CLAUDE.md wording'",
         "git add .github/workflows/ci.yml",
     ],
 )
@@ -176,6 +178,24 @@ def test_normal_work_allowed(tmp_path, command):
         tmp_path,
         "publish" if command.startswith(("git add", "git commit")) else "edit",
     )[0]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Fix efficiency weights Co-Authored-By: Claude noreply@anthropic.com",
+        "Fix efficiency weights co-authored-by: someone",
+        "Fix efficiency weights. Generated with Claude Code",
+        "Fix efficiency weights, see https://claude.ai/code",
+        "Fix efficiency weights, written by Claude",
+    ],
+)
+def test_commit_attribution_denied(tmp_path, message):
+    command = shlex.join(["git", "commit", "-m", message])
+    ok, reason = allowed(
+        {"tool_name": "Bash", "tool_input": {"command": command}}, tmp_path, "publish"
+    )
+    assert not ok and "attribution" in reason
 
 
 def test_symlink_and_external_writes_denied(tmp_path):
