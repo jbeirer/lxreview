@@ -1,4 +1,3 @@
-import getpass
 import json
 import os
 import socket
@@ -141,8 +140,3 @@ def service_exec(paths: Paths, config: Config, name: str) -> None:
         raise LXError(Category.CONFIG, "Unknown service")
     os.umask(0o077)
     os.execve(argv[0], argv, env)
-
-
-def connect_instructions(config: Config) -> str:
-    port = 5900 + config.runtime.display
-    return f"On your laptop: ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:{port}:127.0.0.1:{port} {getpass.getuser()}@{config.runtime.host}\nOpen vnc://127.0.0.1:{port}\nVNC viewer password is in the installation's secrets/vnc-viewer-password (display locally with lxreview desktop password)."

@@ -100,3 +100,66 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
     assert result.stdout.count("Status") == 1
     raw = runner.invoke(app, ["watch", store.id, "--raw"])
     assert all(json.loads(line)["kind"] for line in raw.stdout.splitlines())
+
+
+class LoginSession:
+    def __init__(self, misses):
+        self.misses = misses
+
+    async def sessions(self):
+        return []
+
+    async def new_conversation(self):
+        pass
+
+    async def ensure_ready(self):
+        from lxreview.errors import Category, LXError
+
+        if self.misses:
+            self.misses -= 1
+            raise LXError(Category.AUTH, "Human browser login or CAPTCHA completion required")
+
+    async def query(self, prompt, timeout):
+        return prompt.removeprefix("Reply exactly ")
+
+
+def login_output(paths, monkeypatch, misses):
+    import asyncio
+
+    from lxreview.config import Config
+    from lxreview.paths import atomic_write
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    config = Config()
+    config.runtime.host = "lxplus8s01.cern.ch"
+    config.save(paths)
+    atomic_write(paths.root / "secrets/vnc-viewer-password", "vncsecret")
+    monkeypatch.setattr("lxreview.services.start", lambda *a: None)
+    monkeypatch.setattr("lxreview.backend.browser", lambda *a: LoginSession(misses))
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda seconds: real_sleep(0))
+    result = runner.invoke(app, ["login"])
+    assert result.exit_code == 0, result.output
+    return result.stdout
+
+
+def test_login_shows_copyable_steps_once(paths, monkeypatch):
+    text = login_output(paths, monkeypatch, misses=5)
+    assert text.count("ssh -N") == 1
+    assert "CAPTCHA completion required" not in text
+    ssh = "ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:5999:127.0.0.1:5999 "
+    assert any(
+        line.strip().startswith(ssh) and line.endswith("@lxplus8s01.cern.ch")
+        for line in text.splitlines()
+    )
+    assert "open vnc://127.0.0.1:5999" in text
+    # Only an interactive terminal may display the VNC password.
+    assert "vncsecret" not in text
+    assert "lxreview desktop password" in text
+    assert "ChatGPT login verified" in text
+
+
+def test_login_skips_steps_when_already_logged_in(paths, monkeypatch):
+    text = login_output(paths, monkeypatch, misses=1)
+    assert "ssh " not in text
+    assert "ChatGPT login verified" in text

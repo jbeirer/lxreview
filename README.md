@@ -51,7 +51,7 @@ flowchart LR
   Laptop[Workstation VNC viewer] -. one-time normal login .-> Chrome
 ```
 
-LXPLUS-browser mode survives ordinary workstation disconnection, subject to host supervision policy. It cannot survive node reboot/drain. `login` prints the SSH tunnel and VNC address. Display the generated VNC viewer password with `lxreview desktop password` in an interactive terminal. Never transfer Chrome profiles between users.
+LXPLUS-browser mode survives ordinary workstation disconnection, subject to host supervision policy. It cannot survive node reboot/drain. `login` walks you through the SSH tunnel, a VNC viewer and the generated VNC password, then waits until ChatGPT is ready. It skips these steps if you are already logged in. `lxreview desktop connect` prints the steps again, and `lxreview desktop password` shows the password. The password is shown only in an interactive terminal. Never transfer Chrome profiles between users.
 
 ## Run lifecycle
 
