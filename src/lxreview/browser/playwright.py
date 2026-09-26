@@ -70,6 +70,21 @@ PAGE_STATE = r"""(s) => {
 }"""
 
 
+def divergence(expected: str, actual: str | None) -> str:
+    """Where the composer text first departs from the prompt, for the readback error."""
+    if actual is None:
+        return "composer disappeared"
+    at = next(
+        (i for i, (a, b) in enumerate(zip(expected, actual, strict=False)) if a != b),
+        min(len(expected), len(actual)),
+    )
+    start = max(0, at - 20)
+    return (
+        f"{len(actual)} of {len(expected)} characters, first difference at {at}: "
+        f"expected {expected[start : at + 20]!r}, composer has {actual[start : at + 20]!r}"
+    )
+
+
 def validity(expires: float) -> str:
     days = int((expires - time.time()) // 86400)
     when = time.strftime("%Y-%m-%d", time.localtime(expires))
@@ -168,8 +183,17 @@ class PlaywrightSession:
             raise LXError(Category.BUSY, "ChatGPT is still generating; submission refused")
         composer = page.locator(SELECTORS["composer"]).locator("visible=true").first
         await composer.fill(prompt, timeout=10000)
-        if (await self.state())["prompt"] != prompt.strip():
-            raise LXError(Category.PROTOCOL, "Prompt readback differs; submission refused")
+        # The editor may apply a long insertion after fill() returns; allow it to settle.
+        settled = time.monotonic() + 2
+        while (typed := (await self.state())["prompt"]) != prompt.strip():
+            if time.monotonic() >= settled:
+                raise LXError(
+                    Category.PROTOCOL,
+                    "Prompt readback differs; submission refused ("
+                    + divergence(prompt.strip(), typed)
+                    + ")",
+                )
+            await asyncio.sleep(0.25)
         # An enabled Send button shows ChatGPT has registered the typed prompt.
         ready = time.monotonic() + 10
         while (await self.state())["send"] != "enabled":
