@@ -171,7 +171,8 @@ def test_login_shows_copyable_steps_once(paths, monkeypatch):
     assert "open vnc://127.0.0.1:5999" in text
     # Only an interactive terminal may display the VNC password.
     assert "vncsecret" not in text
-    assert "lxreview desktop password" in text
+    # Commands stay on one physical line even when the launcher path is long.
+    assert any(line.strip() == f"{paths.executable} desktop password" for line in text.splitlines())
     assert "ChatGPT login verified" in text
     # PATH is never modified, so every pasteable command names the launcher itself.
     assert f"Next: {paths.executable} doctor" in text

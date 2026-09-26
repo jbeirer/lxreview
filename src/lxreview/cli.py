@@ -517,7 +517,8 @@ def _login_steps(paths: Paths, config: Config) -> None:
     if sys.stdout.isatty() and password.is_file():
         command(password.read_text().strip(), "bold yellow")
     else:
-        note(f"Display it on {host} with: {_launcher(paths)} desktop password")
+        note(f"Display it on {host} with:")
+        command(f"{_launcher(paths)} desktop password")
     step(4, "Log in to ChatGPT in the Chrome window, as you normally would.")
     note("Complete any CAPTCHA or MFA yourself. LXReview never sees your ChatGPT password.")
     console.print()
