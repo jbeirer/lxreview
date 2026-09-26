@@ -100,6 +100,12 @@ async def test_altered_prompt_is_never_sent(chatgpt):
     assert (await session.state())["user_messages"] == 0
 
 
+async def test_github_rich_link_reads_back_as_the_typed_prompt(chatgpt):
+    session = await chatgpt()
+    prompt = "Review https://github.com/o/r/pull/4 at abc | Do not rely on Claude's notes."
+    assert await session.query(prompt, 30) == "You said: " + prompt
+
+
 async def test_prompt_is_not_submitted_until_chatgpt_accepts_it(chatgpt):
     session = await chatgpt("stuck")
     with pytest.raises(LXError, match="nothing was sent"):

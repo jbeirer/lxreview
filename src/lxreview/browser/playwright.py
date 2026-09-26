@@ -52,10 +52,31 @@ PAGE_STATE = r"""(s) => {
   const turnText = turn ? turn.innerText : '';
   const buttonText = all('button, a').filter(visible).map((b) => (b.textContent || '').trim());
   const page = document.title + ' ' + (document.body ? document.body.innerText.slice(0, 3000) : '');
+  // The editor's document text, not its rendering: ChatGPT decorates GitHub URLs with an
+  // icon widget that innerText turns into a line break. Paragraphs and hard breaks still
+  // count as line breaks, so a prompt the editor actually split never reads back equal.
+  const documentText = (editor) => {
+    const copy = editor.cloneNode(true);
+    copy.querySelectorAll('.ProseMirror-widget').forEach((n) => n.remove());
+    copy.querySelectorAll('br:not(.ProseMirror-trailingBreak)').forEach((n) => n.replaceWith('\n'));
+    const lines = [];
+    let inline = null;
+    for (const n of copy.childNodes) {
+      if (n.nodeType === 1 && /^(P|DIV|PRE|H[1-6]|UL|OL|BLOCKQUOTE)$/.test(n.tagName)) {
+        if (inline !== null) lines.push(inline);
+        lines.push(n.textContent);
+        inline = null;
+      } else {
+        inline = (inline || '') + n.textContent;
+      }
+    }
+    if (inline !== null) lines.push(inline);
+    return lines.join('\n');
+  };
   return {
     url: location.href,
     composer: !!composer,
-    prompt: composer ? composer.innerText.trim() : null,
+    prompt: composer ? documentText(composer).trim() : null,
     send: send ? (send.disabled || send.getAttribute('aria-disabled') === 'true' ? 'disabled' : 'enabled') : null,
     generating: all(s.stop, root).some(visible),
     replies: replies.length,

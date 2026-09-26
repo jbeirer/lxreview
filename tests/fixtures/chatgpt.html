@@ -12,6 +12,10 @@
     main { max-width: 700px; margin: 0 auto; padding: 16px; }
     [data-chatgpt-composer] { display: flex; gap: 8px; margin-top: 24px; }
     .ProseMirror { flex: 1; min-height: 26px; border: 1px solid #999; padding: 4px; }
+    .ProseMirror p { margin: 0; white-space: break-spaces; }
+    .Mention { white-space: nowrap; color: #0a66c2; }
+    .IconContainer { display: inline-block; }
+    .IconContainer svg { display: flex; }
   </style>
 </head>
 <body>
@@ -40,9 +44,28 @@
       document.body.append(Object.assign(document.createElement('iframe'), { src: 'about:blank#challenges.cloudflare.com' }));
     }
 
+    // ChatGPT keeps the prompt in a paragraph and turns GitHub URLs into a rich link whose
+    // icon is a non-editable ProseMirror widget; the rendered innerText then gains a line break.
+    const richLink = (url) =>
+      `<span rich-link-source-app-id="github" class="Mention" text-link-href="${url}" data-rich-text-generated-autolink="">` +
+      '<span class="Label"><span data-inline-url-icon="" class="Mention ProseMirror-widget" aria-hidden="true" contenteditable="false">' +
+      '<span class="IconContainer" contenteditable="false"><svg width="20" height="20" viewBox="0 0 20 20"><path d="M2 2h16v16H2z"></path></svg></span>' +
+      `</span>${url}</span></span>`;
+    const escape = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    // What ChatGPT would send: the document text, without editor widgets.
+    const documentText = () => {
+      const copy = composer.cloneNode(true);
+      copy.querySelectorAll('.ProseMirror-widget').forEach((n) => n.remove());
+      return copy.textContent;
+    };
+
     composer.addEventListener('input', () => {
       if (scenario === 'mangle') composer.textContent = composer.textContent.toUpperCase();
-      send.disabled = scenario === 'stuck' || !composer.innerText.trim();
+      const text = documentText();
+      if (text && !composer.querySelector('p')) {
+        composer.innerHTML = '<p>' + escape(text).replace(/https:\/\/github\.com\/\S+/g, richLink) + '</p>';
+      }
+      send.disabled = scenario === 'stuck' || !text.trim();
     });
 
     composer.addEventListener('keydown', (event) => {
@@ -66,7 +89,7 @@
     };
 
     send.addEventListener('click', async () => {
-      const text = composer.innerText.trim();
+      const text = documentText().trim();
       composer.textContent = '';
       send.disabled = true;
       send.hidden = true;
