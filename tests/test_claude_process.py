@@ -140,6 +140,11 @@ assert settings['sandbox']['network']['allowedDomains'] == []
 assert 'SSH_AUTH_SOCK' not in os.environ
 assert 'blockReadsOutsideWorkingDirectories' not in settings['permissions']
 assert any(path.endswith('/.ssh') for path in settings['sandbox']['filesystem']['denyRead'])
+# The turn's private directory holds the caches and scratch area: it must be writable, and
+# the prompt names the scratch area literally (commands expand no variables).
+assert os.environ['TMPDIR'] in settings['sandbox']['filesystem']['allowWrite']
+prompt = sys.stdin.read()
+assert os.environ['TMPDIR'] + '/work' in prompt and os.path.isdir(os.environ['TMPDIR'] + '/work')
 if phase=='edit':
     assert any(path.endswith('.git') for path in settings['sandbox']['filesystem']['denyWrite'])
     result={'tests':['pytest: passed'],'tests_passed':True,'summary':'fixed'}

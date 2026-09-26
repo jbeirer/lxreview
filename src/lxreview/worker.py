@@ -87,6 +87,13 @@ async def claude_turn(
     state = store.load()
     repo = Path(state["repo"])
     settings_file = store.directory / "worker-settings.json"
+    # The turn's private directory: TMPDIR, the writable caches and a scratch area for build
+    # output. The sandbox reaches its proxy through a socket under TMPDIR, which must be
+    # outside the installation root (read-only to sandboxed commands) and short enough for a
+    # socket path. mkdtemp creates the directory 0700.
+    scratch = tempfile.mkdtemp(prefix="lxreview-", dir="/tmp")
+    work = Path(scratch) / "work"
+    work.mkdir(mode=0o700)
     git_common = Path(state["audit"]).parent.parent
     phase = "evaluate" if read_only else "publish" if schema is PublishResult else "edit"
     hook_cmd = shlex.join([str(paths.executable), "guard", "--repo", str(repo), "--phase", phase])
@@ -120,7 +127,7 @@ async def claude_turn(
                 "autoAllowBashIfSandboxed": True,
                 "excludedCommands": [],
                 "filesystem": {
-                    "allowWrite": [str(git_common)] if phase == "publish" else [],
+                    "allowWrite": [scratch] + ([str(git_common)] if phase == "publish" else []),
                     # Git reads its user configuration from ~/.config/git (ignores,
                     # attributes, identity) although ~/.config as a whole is secret.
                     "allowRead": [str(Path.home() / ".config/git")],
@@ -186,10 +193,6 @@ async def claude_turn(
     session_id = session_file.read_text().strip()
     if session_id:
         argv += ["--resume", session_id]
-    # The sandbox reaches its proxy through a socket under TMPDIR, which must be outside the
-    # installation root (read-only to sandboxed commands) and short enough for a socket
-    # path. mkdtemp creates the directory 0700. It also holds the turn's writable caches.
-    scratch = tempfile.mkdtemp(prefix="lxreview-", dir="/tmp")
     mounts: list[int] = []
     try:
         child_environment = toolchain.turn_environment(
@@ -232,6 +235,13 @@ async def claude_turn(
         store.update(claude_pid=process.pid)
         assert process.stdin and process.stdout
         async with asyncio.timeout(config.review.worker_timeout):
+            if not read_only:
+                # Commands expand no variables, so name the scratch area literally.
+                prompt += (
+                    f"\n\nWritable scratch directory for build output and other temporary"
+                    f" files: {work} (use this literal path; nothing outside the repository"
+                    " and this directory is writable)."
+                )
             process.stdin.write(prompt.encode())
             await process.stdin.drain()
             process.stdin.close()
