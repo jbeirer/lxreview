@@ -74,7 +74,8 @@ class RuntimeConfig(Strict):
     supervisor: Literal["systemd", "tmux-scope", "launchd"] = "systemd"
 
 
-# Per-run choices (`lxreview run --reviewer-model ...`) and the settings they override.
+# Per-run choices (`lxreview run --chatgpt MODEL:EFFORT --claude MODEL:EFFORT`) and the
+# settings they override.
 CHOICES = {
     "reviewer_model": ("reviewer", "model"),
     "reviewer_effort": ("reviewer", "reasoning_effort"),

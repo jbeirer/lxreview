@@ -16,7 +16,7 @@ class Verdict(StrEnum):
 
 # A reviewer model as the provider names it ("GPT-5.6 Sol"), and a reasoning level as its
 # picker names it ("high"); "default" leaves the provider's current choice untouched.
-MODEL_NAME = r"^[\w .+:()-]{1,60}$"
+MODEL_NAME = r"^[\w .+()-]{1,60}$"
 EFFORT_NAME = r"^[a-z][a-z -]{0,30}$"
 
 

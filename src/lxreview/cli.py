@@ -317,31 +317,34 @@ def choice_options(json_output: bool = typer.Option(False, "--json")):
     )
 
 
+def model_choices(chatgpt: str, claude: str) -> dict:
+    """`--chatgpt MODEL[:EFFORT]` and `--claude MODEL[:EFFORT]` as per-run choices."""
+    choices = {}
+    for role, value in (("reviewer", chatgpt), ("worker", claude)):
+        model, _, effort = value.partition(":")
+        if model.strip():
+            choices[f"{role}_model"] = model.strip()
+        if effort.strip():
+            choices[f"{role}_effort"] = effort.strip()
+    return choices
+
+
 @app.command(name="run")
 def start_run(
     target: str,
     repo: Path = typer.Option(Path.cwd(), "--repo"),
     max_passes: int | None = None,
-    reviewer_model: str = typer.Option("", help="ChatGPT model for this run (see options)."),
-    reviewer_effort: str = typer.Option("", help="ChatGPT reasoning level for this run."),
-    worker_model: str = typer.Option("", help="Claude model for this run."),
-    worker_effort: str = typer.Option("", help="Claude effort for this run."),
+    chatgpt: str = typer.Option(
+        "", help="Reviewer MODEL[:EFFORT] for this run, e.g. sol:high or :medium (see options)."
+    ),
+    claude: str = typer.Option("", help="Worker MODEL[:EFFORT] for this run, e.g. opus:xhigh."),
 ):
     """Start a detached autonomous Claude review/fix worker."""
     from .contracts import ReviewRequest
     from .git import Repository
 
     paths, config = context()
-    choices = {
-        key: value
-        for key, value in (
-            ("reviewer_model", reviewer_model),
-            ("reviewer_effort", reviewer_effort),
-            ("worker_model", worker_model),
-            ("worker_effort", worker_effort),
-        )
-        if value
-    }
+    choices = model_choices(chatgpt, claude)
     chosen = config.with_choices(choices)
     with lock(paths.root / "state/setup.lock"):
         repository = Repository(repo, paths)
@@ -379,11 +382,8 @@ def start_run(
                 "status": "QUEUED",
                 "watch": f"lxreview watch {store.id}",
                 # "default" leaves ChatGPT's current model and Claude Code's own choice.
-                "reviewer": {
-                    "model": chosen.reviewer.model,
-                    "reasoning_effort": chosen.reviewer.reasoning_effort,
-                },
-                "worker": {"model": chosen.worker.model, "effort": chosen.worker.effort},
+                "chatgpt": f"{chosen.reviewer.model}:{chosen.reviewer.reasoning_effort}",
+                "claude": f"{chosen.worker.model}:{chosen.worker.effort}",
             },
             True,
         )

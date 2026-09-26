@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from lxreview.cli import app
@@ -354,3 +355,28 @@ def test_options_are_read_live_and_fall_back_to_the_last_check_while_busy(paths,
         busy = json.loads(runner.invoke(app, ["options", "--json"]).stdout)
     assert busy["reviewer"]["live"] is False and busy["reviewer"]["models"] == ["GPT-5.5"]
     assert "unavailable" in busy["reviewer"]
+
+
+@pytest.mark.parametrize(
+    ("chatgpt", "claude", "expected"),
+    [
+        (
+            "sol:high",
+            "opus:xhigh",
+            {
+                "reviewer_model": "sol",
+                "reviewer_effort": "high",
+                "worker_model": "opus",
+                "worker_effort": "xhigh",
+            },
+        ),
+        (":medium", "", {"reviewer_effort": "medium"}),
+        ("GPT-5.6 Sol", "opus", {"reviewer_model": "GPT-5.6 Sol", "worker_model": "opus"}),
+        ("", ":max", {"worker_effort": "max"}),
+        ("", "", {}),
+    ],
+)
+def test_model_and_effort_options_split_into_run_choices(chatgpt, claude, expected):
+    from lxreview.cli import model_choices
+
+    assert model_choices(chatgpt, claude) == expected
