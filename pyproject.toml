@@ -8,7 +8,7 @@ description = "Independent AI review loops for LXPLUS development"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
-dependencies = ["typer>=0.16,<1", "pydantic>=2.11,<3", "httpx>=0.28,<1", "rich>=14,<16", "mcp>=1.12,<2", "tomli-w>=1.2,<2", "psutil>=7,<8", "aiohttp>=3.12,<4"]
+dependencies = ["typer>=0.16,<1", "pydantic>=2.11,<3", "httpx>=0.28,<1", "rich>=14,<16", "mcp>=1.12,<3", "tomli-w>=1.2,<2", "psutil>=7,<8", "aiohttp>=3.12,<4"]
 [project.scripts]
 lxreview = "lxreview.cli:main"
 [dependency-groups]
