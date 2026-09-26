@@ -25,8 +25,9 @@ def shorten(text: object, limit: int = 100) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def claude_activity(event: dict) -> list[str]:
-    """Summarize one Claude stream-json event: edits, shell commands, refusals, turn ends."""
+def claude_activity(event: dict, limit: int = 100) -> list[str]:
+    """Summarize one Claude stream-json event: what Claude says, edits, shell commands,
+    refusals and turn ends. Thinking never reaches the timeline; redaction removed it."""
     kind = event.get("type")
     if kind == "result":
         seconds = (event.get("duration_ms") or 0) / 1000
@@ -43,24 +44,27 @@ def claude_activity(event: dict) -> list[str]:
         data = block.get("input")
         if not isinstance(data, dict):
             data = {}
-        if block.get("type") == "tool_use":
+        if block.get("type") == "text" and event.get("type") == "assistant":
+            if text := " ".join(str(block.get("text", "")).split()):
+                lines.append(f"Claude: {shorten(text, 3 * limit)}")
+        elif block.get("type") == "tool_use":
             name = block.get("name")
             if name in ("Edit", "Write", "MultiEdit"):
                 lines.append(f"Editing {data.get('file_path', '?')}")
             elif name == "Bash":
-                lines.append(f"$ {shorten(data.get('command', ''))}")
+                lines.append(f"$ {shorten(data.get('command', ''), limit)}")
         elif block.get("type") == "tool_result" and block.get("is_error"):
             detail = block.get("content")
             if isinstance(detail, list):
                 detail = " ".join(str(d.get("text", "")) for d in detail if isinstance(d, dict))
-            lines.append(f"Tool refused/failed: {shorten(detail)}")
+            lines.append(f"Tool refused/failed: {shorten(detail, limit)}")
     return lines
 
 
-def describe(event: dict) -> list[str]:
+def describe(event: dict, limit: int = 100) -> list[str]:
     kind, n = event.get("kind"), event.get("pass_number", "?")
     if kind == "claude":
-        texts = claude_activity(event.get("event") or {})
+        texts = claude_activity(event.get("event") or {}, limit)
     elif kind == "run_created":
         texts = ["Run created"]
     elif kind == "resumed":
@@ -76,13 +80,15 @@ def describe(event: dict) -> list[str]:
         texts = [f"Reviewer pass {n} complete, {event.get('verdict')}{counts}"]
     elif kind == "finding_evaluated":
         texts = [
-            f"{event.get('decision', '?'):<9} {event.get('finding')} {shorten(event.get('title', ''), 80)}"
+            f"{event.get('decision', '?'):<9} {event.get('finding')} {shorten(event.get('title', ''), limit)}"
         ]
+        if event.get("reason"):
+            texts.append(f"  because {shorten(event['reason'], limit)}")
     elif kind == "evaluation_complete":
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
     elif kind == "tests_reported":
         texts = [f"Tests {'PASS' if event.get('passed') else 'FAIL'}"]
-        texts += [f"  {shorten(test)}" for test in event.get("tests", [])]
+        texts += [f"  {shorten(test, limit)}" for test in event.get("tests", [])]
     elif kind == "fixes_pushed":
         texts = [f"Commit {str(event.get('commit', ''))[:10]} pushed"]
     elif kind == "diff_capture_failed":
@@ -91,7 +97,9 @@ def describe(event: dict) -> list[str]:
         texts = ["Ignored an unparseable Claude output line"]
     elif kind == "run_finished":
         error = event.get("error")
-        texts = [f"Finished: {event.get('status')}" + (f" ({shorten(error)})" if error else "")]
+        texts = [
+            f"Finished: {event.get('status')}" + (f" ({shorten(error, limit)})" if error else "")
+        ]
     else:
         texts = [str(kind)]
     return [f"{clock(event.get('time', ''))}  {text}" for text in texts]

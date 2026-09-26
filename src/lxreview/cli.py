@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -375,8 +376,16 @@ def watch(
     run_id: str,
     once: bool = False,
     raw: bool = typer.Option(False, "--raw", help="Print the redacted JSON events unformatted."),
+    chat: bool = typer.Option(
+        False, "--chat", help="Compact, flushed lines for following a run from a Claude chat."
+    ),
+    after: int = typer.Option(0, "--after", min=0, help="Skip the first N events."),
 ):
     """Follow a redacted, persistent event timeline; Ctrl-C only stops watching."""
+    if chat:
+        if raw:
+            raise LXError(Category.CONFIG, "Choose --chat or --raw")
+        return _watch_chat(run_id, after)
     from .timeline import PHASES, describe
 
     paths, config = context()
@@ -418,6 +427,63 @@ def watch(
             state = store.observed(config)
     except KeyboardInterrupt:
         return
+
+
+# A Claude chat follows a run through its Monitor tool, which delivers each stdout line as a
+# notification and stops a watch after 30 minutes; end sooner and name the continuation.
+CHAT_WATCH_SECONDS = 25 * 60
+CHAT_POLL_SECONDS = 5
+
+
+def _watch_chat(run_id: str, after: int) -> None:
+    from .timeline import PHASES, describe
+
+    paths, config = context()
+    store = RunStore(paths, run_id)
+    deadline = time.monotonic() + CHAT_WATCH_SECONDS
+    offset, seen, shown = 0, 0, None
+
+    def emit(lines: list[str]) -> None:
+        if lines:
+            print("\n".join(lines), flush=True)
+
+    state = store.observed(config)
+    if after == 0:
+        emit([f"LXReview {store.id} for {state['target']}"])
+    while True:
+        lines = []
+        with (store.directory / "events.jsonl").open() as stream:
+            stream.seek(offset)
+            while (line := stream.readline()).endswith("\n"):
+                offset = stream.tell()
+                seen += 1
+                if seen <= after:
+                    continue
+                try:
+                    lines += describe(json.loads(line), limit=240)
+                except ValueError:
+                    continue
+        current = (state["status"], state["pass"], state["phase"])
+        status = (
+            f"Status {state['status']}, pass {state['pass']}/{state['max_passes']}"
+            f" ({PHASES.get(state['phase'], state['phase'])})"
+        )
+        if current != shown:
+            lines.append(status)
+            shown = current
+        emit(lines)
+        if state["status"] in TERMINAL:
+            return
+        if time.monotonic() >= deadline:
+            emit(
+                [
+                    f"Still running. Continue watching with: "
+                    f"{shlex.quote(str(paths.executable))} watch {store.id} --chat --after {seen}"
+                ]
+            )
+            return
+        time.sleep(CHAT_POLL_SECONDS)
+        state = store.observed(config)
 
 
 @app.command()
@@ -772,25 +838,44 @@ def update(source: Path | None = None, rollback: bool = False):
                 raise LXError(Category.BUSY, "Stop active runs before updating")
         if source and rollback:
             raise LXError(Category.CONFIG, "Choose --source or --rollback")
-        if source:
-            application_update(paths, source)
-            restarted = _restart_long_running(paths, config)
-            output(
-                "Application updated atomically. Run doctor; update --rollback restores the prior launcher."
-                + (f" Restarted on the new version: {', '.join(restarted)}." if restarted else "")
-            )
-            return
         if rollback:
             application_rollback(paths)
             output("Previous application launcher restored. Run doctor.")
             return
-        _stop(paths, config)
-        if config.mode == "local-browser" and config.role == "host":
-            raise LXError(Category.CONFIG, "Browser runtimes belong on the paired workstation")
-        install_runtimes(paths, config)
-        output(
-            "Pinned runtimes verified. Use update --source /path/to/reviewed/checkout for an application upgrade."
-        )
+        if not source:
+            _stop(paths, config)
+            if config.mode == "local-browser" and config.role == "host":
+                raise LXError(Category.CONFIG, "Browser runtimes belong on the paired workstation")
+            install_runtimes(paths, config)
+            output(
+                "Pinned runtimes verified. Use update --source /path/to/reviewed/checkout for an application upgrade."
+            )
+            return
+        application_update(paths, source)
+        restarted = _restart_long_running(paths, config)
+    # The new release owns the Claude command texts; its launcher rewrites them once the
+    # setup lock is free.
+    if config.role == "host":
+        from .process import run as run_process
+
+        run_process([str(paths.executable), "integrate"], paths, timeout=60)
+    output(
+        "Application updated atomically. Run doctor; update --rollback restores the prior launcher."
+        + (f" Restarted on the new version: {', '.join(restarted)}." if restarted else "")
+    )
+
+
+@app.command(hidden=True)
+def integrate():
+    """Rewrite this release's Claude commands and MCP registration (run by update)."""
+    from .install import claude
+
+    paths, config = context()
+    if config.role != "host":
+        raise LXError(Category.CONFIG, "Claude integration belongs on the repository host")
+    with lock(paths.root / "state/setup.lock"):
+        claude.install(paths, config)
+    output("Claude commands refreshed")
 
 
 def _restart_long_running(paths: Paths, config: Config) -> list[str]:

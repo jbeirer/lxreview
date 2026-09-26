@@ -68,7 +68,12 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
         non_blocking=0,
     )
     store.event(
-        "finding_evaluated", pass_number=1, finding="S1", decision="ACCEPTED", title="Off by one"
+        "finding_evaluated",
+        pass_number=1,
+        finding="S1",
+        decision="ACCEPTED",
+        title="Off by one",
+        reason="The loop skips the last bin",
     )
     store.event(
         "claude",
@@ -76,6 +81,8 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
             "type": "assistant",
             "message": {
                 "content": [
+                    {"type": "thinking", "thinking": "PRIVATE_REASONING"},
+                    {"type": "text", "text": "The range stops one short;\nfixing it."},
                     {"type": "tool_use", "name": "Edit", "input": {"file_path": "src/a.py"}},
                     {
                         "type": "tool_use",
@@ -92,6 +99,8 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
     for text in (
         "1 substantial",
         "ACCEPTED  S1 Off by one",
+        "because The loop skips the last bin",
+        "Claude: The range stops one short; fixing it.",
         "Editing src/a.py",
         "$ python -m pytest tests",
         "Finished: CLEAN",
@@ -100,6 +109,47 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
     assert result.stdout.count("Status") == 1
     raw = runner.invoke(app, ["watch", store.id, "--raw"])
     assert all(json.loads(line)["kind"] for line in raw.stdout.splitlines())
+    assert "PRIVATE_REASONING" not in result.stdout
+    chat = runner.invoke(app, ["watch", store.id, "--chat"])
+    assert chat.exit_code == 0, chat.output
+    lines = chat.stdout.splitlines()
+    assert lines[0] == f"LXReview {store.id} for https://github.com/org/repo/pull/1"
+    assert any(line.endswith("Claude: The range stops one short; fixing it.") for line in lines)
+    assert lines[-1].startswith("Status CLEAN, pass")
+    assert "PRIVATE_REASONING" not in chat.stdout
+    # Continuing after all but the last event shows only what is new.
+    total = len((store.directory / "events.jsonl").read_text().splitlines())
+    tail = runner.invoke(app, ["watch", store.id, "--chat", "--after", str(total - 1)])
+    assert [line.split("  ", 1)[-1] for line in tail.stdout.splitlines()] == [
+        "Finished: CLEAN",
+        tail.stdout.splitlines()[-1],
+    ]
+
+
+def test_chat_watch_ends_before_the_monitor_limit_and_names_the_continuation(
+    paths, tmp_path, monkeypatch
+):
+    import lxreview.cli as cli
+    from lxreview.config import Config
+    from lxreview.runs import RunStore
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    Config().save(paths)
+    identity = {"head": "a" * 40, "branch": "f", "upstream": "origin/f", "remote_url": "u"}
+    store = RunStore.create(
+        paths, tmp_path, "https://github.com/org/repo/pull/1", identity, 5, tmp_path / "audit"
+    )
+    store.event("review_started", pass_number=1, head="a" * 40)
+    monkeypatch.setattr(RunStore, "observed", lambda self, config: self.load())
+    monkeypatch.setattr(cli, "CHAT_WATCH_SECONDS", 0)
+    result = runner.invoke(app, ["watch", store.id, "--chat"])
+    assert result.exit_code == 0, result.output
+    total = len((store.directory / "events.jsonl").read_text().splitlines())
+    assert result.stdout.splitlines()[-1] == (
+        f"Still running. Continue watching with: {paths.executable} watch {store.id}"
+        f" --chat --after {total}"
+    )
+    assert "Reviewer pass 1 started" in result.stdout
 
 
 class LoginSession:

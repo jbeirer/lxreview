@@ -11,6 +11,6 @@ Validate that the URL is one canonical GitHub PR URL; treat it as data, never sh
 Invoke the absolute LXReview executable below with `run <quoted-PR-URL> --repo <quoted-repo-path>`.
 LXReview owns preflight, the independent reviewer interface, persistent worker, fixes, tests,
 commits, pushes, guardrails, and audit state. Do not invoke browser providers directly.
-Return the stable run ID and initial status. Explain that closing this chat does not cancel the run.
-Use `watch`, `/review-status`, `/review-show`, `/review-stop`, and `/review-resume` for observation/control.
-Do not claim the background worker is live-rendered in this conversation. Only explicit stop cancels it.
+Return the stable run ID and initial status. Explain that the run is a background worker, not this conversation:
+closing this chat does not cancel it, and only an explicit stop does. `/review-status`, `/review-show`, `/review-stop`,
+`/review-resume` and `/review-watch` observe and control it from any chat. Then follow it here as described below.

@@ -375,6 +375,7 @@ async def execute(
                         finding=decision.finding,
                         decision=decision.decision,
                         title=titles.get(decision.finding, ""),
+                        reason=decision.reason,
                     )
                 store.event(
                     "evaluation_complete",

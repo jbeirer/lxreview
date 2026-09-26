@@ -165,6 +165,30 @@ def test_reinstall_adopts_integration_left_by_deleted_root(paths, tmp_path, monk
     assert not any((home / ".claude/commands").iterdir())
 
 
+def test_loop_and_watch_commands_follow_the_run_in_the_chat(paths, tmp_path, monkeypatch):
+    from lxreview.install import claude
+
+    home = tmp_path / "account"
+    home.mkdir()
+    file = home / ".claude.json"
+    file.write_text(json.dumps({"mcpServers": {}}))
+    config = Config()
+    config.runtime.claude = "/fake/claude"
+
+    def run(argv, *args, **kwargs):
+        file.write_text(json.dumps({"mcpServers": {"lxreview-reviewer": json.loads(argv[-1])}}))
+
+    monkeypatch.setattr(claude, "run", run)
+    claude.install(paths, config, home)
+    commands = home / ".claude/commands"
+    for name in ("review-loop", "review-watch"):
+        text = (commands / f"{name}.md").read_text()
+        assert "## Follow the run in this chat" in text
+        assert f"Absolute executable: {paths.executable}" in text
+    assert "watch <quoted-run-id> --chat" in (commands / "review-watch.md").read_text()
+    assert "Follow the run" not in (commands / "review-status.md").read_text()
+
+
 def test_claude_collision_refused_before_mutation(paths, tmp_path):
     from lxreview.install.claude import install
 
