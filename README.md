@@ -82,7 +82,7 @@ State and redacted events live under `~/.lxreview/state/runs/<id>`. Verbatim rev
 
 ## Removal
 
-Stop active runs, then run `lxreview uninstall`. Only unchanged LXReview-owned Claude entries and symlinks are removed. The installation root is moved to a private recovery archive whose path is printed; delete it to remove browser state and runtimes completely. Git audit logs are retained and may be removed separately. Shell configuration and unrelated tools are untouched.
+Stop active runs, then run `lxreview uninstall`. Only unchanged LXReview-owned Claude entries and symlinks are removed. The installation root is moved to a private recovery archive whose path is printed; delete it to remove browser state and runtimes completely. Git audit logs are retained and may be removed separately. Shell configuration and unrelated tools are untouched. If the installation folder was deleted by hand instead, rerun `python3 scripts/bootstrap.py`: it recognizes the leftovers and prints the commands that stop any services still running. The following `setup` reuses the existing Claude Code entries, so a later `uninstall` still removes them.
 
 ## Development
 

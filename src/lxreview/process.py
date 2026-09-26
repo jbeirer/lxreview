@@ -228,6 +228,7 @@ class Supervisor:
             unit = self.unit(name)
             state_file = self.paths.root / f"state/services/{unit}.json"
             if not state_file.exists():
+                self._stop_orphan(unit)
                 return
             # status also checks ownership/host even for an exited job.
             active = self.status(name)
@@ -252,6 +253,23 @@ class Supervisor:
             else:
                 suffix = ".scope" if kind == "tmux-scope" else ".service"
                 run([binary("systemctl"), "--user", "stop", unit + suffix], self.paths)
+
+    def _stop_orphan(self, unit: str) -> None:
+        # The record went with a manually deleted installation, but the unit name still
+        # embeds this root. Supervisors are per host, so no host check is needed here.
+        if platform.system() == "Darwin":
+            label = f"gui/{os.getuid()}/org.lxreview.{unit}"
+            if run([binary("launchctl"), "print", label], self.paths, check=False).returncode == 0:
+                run([binary("launchctl"), "bootout", label], self.paths, check=False)
+            return
+        try:
+            systemctl = binary("systemctl")
+        except LXError:
+            return
+        for suffix in (".service", ".scope"):
+            probe = [systemctl, "--user", "is-active", "--quiet", unit + suffix]
+            if run(probe, self.paths, check=False).returncode == 0:
+                run([systemctl, "--user", "stop", unit + suffix], self.paths)
 
     def exec(self, name: str) -> None:
         state = json.loads((self.paths.root / f"state/services/{self.unit(name)}.json").read_text())

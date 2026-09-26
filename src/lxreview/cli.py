@@ -102,8 +102,9 @@ def setup(
             for file in (paths.root / "state/runs").glob("*/state.json"):
                 if json.loads(file.read_text())["status"] not in TERMINAL:
                     raise LXError(Category.BUSY, "Stop active runs before changing setup")
-            for name in ("bridge", "browser", "desktop"):
-                Supervisor(paths, config).stop(name)
+        # On a first setup this stops services orphaned by a manually deleted installation.
+        for name in ("bridge", "browser", "desktop"):
+            Supervisor(paths, config).stop(name)
         if not mode:
             mode = typer.prompt("Browser mode (lxplus-browser/local-browser)", default=config.mode)
         role = role or (

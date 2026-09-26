@@ -53,6 +53,29 @@ def test_supervisor_idempotence_and_scoped_stop(paths, monkeypatch):
     assert not any("pkill" in str(c) for c in calls)
 
 
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_stop_reaches_unit_orphaned_by_deleted_installation(paths, monkeypatch, system):
+    calls = []
+
+    def run(argv, *a, **kw):
+        calls.append(argv)
+        loaded = argv[1] == "print" or argv[-1].endswith(".service")
+        return subprocess.CompletedProcess(argv, 0 if loaded else 3, "", "")
+
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("lxreview.process.run", run)
+    monkeypatch.setattr("lxreview.process.platform.system", lambda: system)
+    supervisor = Supervisor(paths, Config())
+    unit = supervisor.unit("browser")
+    # No service record: it was deleted together with the installation that started the unit.
+    supervisor.stop("browser")
+    if system == "Linux":
+        assert ["/usr/bin/systemctl", "--user", "stop", unit + ".service"] in calls
+        assert not any("stop" in argv and argv[-1].endswith(".scope") for argv in calls)
+    else:
+        assert calls[-1][1:] == ["bootout", f"gui/{__import__('os').getuid()}/org.lxreview.{unit}"]
+
+
 def test_stale_service_on_another_host_refuses(paths):
     supervisor = Supervisor(paths, Config())
     write_json(
@@ -111,6 +134,37 @@ def test_reversible_claude_integration_preserves_unrelated_entries(paths, tmp_pa
     assert not (home / ".claude/commands/review-loop.md").exists()
 
 
+def test_reinstall_adopts_integration_left_by_deleted_root(paths, tmp_path, monkeypatch):
+    import shutil
+
+    from lxreview.install import claude
+
+    home = tmp_path / "account"
+    home.mkdir()
+    file = home / ".claude.json"
+    file.write_text(json.dumps({"mcpServers": {}}))
+    config = Config()
+    config.runtime.claude = "/fake/claude"
+
+    def run(argv, *args, **kwargs):
+        data = json.loads(file.read_text())
+        if "add-json" in argv:
+            data["mcpServers"]["lxreview-reviewer"] = json.loads(argv[-1])
+        else:
+            data["mcpServers"].pop("lxreview-reviewer")
+        file.write_text(json.dumps(data))
+
+    monkeypatch.setattr(claude, "run", run)
+    claude.install(paths, config, home)
+    # A manual rm -rf of the root loses the ownership record and the link targets.
+    (paths.root / "state/claude-integration.json").unlink()
+    shutil.rmtree(paths.root / "claude")
+    claude.install(paths, config, home)
+    claude.uninstall(paths, config)
+    assert json.loads(file.read_text()) == {"mcpServers": {}}
+    assert not any((home / ".claude/commands").iterdir())
+
+
 def test_claude_collision_refused_before_mutation(paths, tmp_path):
     from lxreview.install.claude import install
 
@@ -125,7 +179,7 @@ def test_claude_collision_refused_before_mutation(paths, tmp_path):
     assert not (directory / "review-loop.md").exists()
 
 
-def test_existing_identical_mcp_is_not_claimed(paths, tmp_path, monkeypatch):
+def test_existing_identical_mcp_is_adopted_not_re_added(paths, tmp_path, monkeypatch):
     from lxreview.install import claude
 
     home = tmp_path / "account"
@@ -143,13 +197,15 @@ def test_existing_identical_mcp_is_not_claimed(paths, tmp_path, monkeypatch):
     file = home / ".claude.json"
     file.write_text(json.dumps(original))
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("Preexisting registration must not be added or removed")
-
-    monkeypatch.setattr(claude, "run", forbidden)
+    calls = []
+    monkeypatch.setattr(claude, "run", lambda argv, *args, **kwargs: calls.append(argv))
     claude.install(paths, Config(), home)
+    assert calls == []
+    # The entry embeds this root, so only this installation can have created it.
     claude.uninstall(paths, Config())
-    assert json.loads(file.read_text()) == original
+    assert [argv[1:] for argv in calls] == [
+        ["mcp", "remove", "--scope", "user", "lxreview-reviewer"]
+    ]
 
 
 def test_application_rollback_uses_private_existing_interpreter(paths):

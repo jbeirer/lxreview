@@ -52,14 +52,14 @@ def install(paths: Paths, config: Config, home: Path | None = None) -> None:
             )
     # Record intended ownership before creating any external links. A failed setup
     # remains removable even if it stops between individual symlink operations.
-    owned_commands.update(
-        name for name in COMMANDS if not (command_dir / f"{name}.md").is_symlink()
-    )
+    # Existing links already point into this root and an existing registration equals
+    # `desired`, which embeds this root: both are leftovers of this installation whose
+    # record was lost (for example, a manually deleted root), so adopt them.
+    owned_commands.update(COMMANDS)
     write_json(
         record,
         {
             "registration": desired,
-            "registration_owned": previous.get("registration_owned", not present),
             "commands": sorted(owned_commands),
             "home": str(home),
         },
@@ -105,6 +105,7 @@ def uninstall(paths: Paths, config: Config) -> None:
     home = Path(owned["home"])
     file = home / ".claude.json"
     current = json.loads(file.read_text()) if file.exists() else {}
+    # Only records written by earlier versions can disown the registration.
     if (
         owned.get("registration_owned", True)
         and current.get("mcpServers", {}).get("lxreview-reviewer") == owned["registration"]

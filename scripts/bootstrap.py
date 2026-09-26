@@ -2,10 +2,80 @@
 """Install from this reviewed checkout without changing shell configuration."""
 
 import argparse
+import hashlib
 import os
+import platform
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+# Every top-level name LXReview creates below its installation root.
+OWNED = {
+    "bin",
+    "cache",
+    "claude",
+    "config",
+    "downloads",
+    "logs",
+    "runtime",
+    "secrets",
+    "state",
+    "versions",
+}
+
+
+def leftover_services(root):
+    """Return commands that stop services still running from a deleted installation."""
+    # Mirrors Supervisor.unit: unit names embed a hash of the installation root.
+    prefix = "lxreview-" + hashlib.sha256(str(root).encode()).hexdigest()[:8] + "-"
+    if platform.system() == "Darwin":
+        launchctl = shutil.which("launchctl", path="/bin:/usr/bin")
+        if not launchctl:
+            return []
+        listing = subprocess.run([launchctl, "list"], capture_output=True, text=True).stdout
+        labels = [line.split()[-1] for line in listing.splitlines() if line.strip()]
+        return [
+            f"launchctl bootout gui/{os.getuid()}/{label}"
+            for label in labels
+            if label.startswith("org.lxreview." + prefix)
+        ]
+    systemctl = shutil.which("systemctl", path="/usr/bin:/bin")
+    if not systemctl:
+        return []
+    listing = subprocess.run(
+        [systemctl, "--user", "list-units", "--plain", "--no-legend", prefix + "*"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    units = [line.split()[0] for line in listing.splitlines() if line.strip()]
+    return ["systemctl --user stop " + " ".join(units)] if units else []
+
+
+def occupied(root, source):
+    """Explain how to proceed when the installation root is not empty, else None."""
+    if not root.exists() or not any(root.iterdir()):
+        return None
+    launcher = root / "bin/lxreview"
+    if launcher.exists():
+        return (
+            f"LXReview is already installed in {root}.\n"
+            f"  To upgrade it:  {launcher} update --source {source}\n"
+            f"  To remove it:   {launcher} uninstall"
+        )
+    if any(entry.name not in OWNED for entry in root.iterdir()):
+        return f"{root} is not empty and is not an LXReview installation; choose an empty --root."
+    lines = [f"{root} holds leftovers of an installation deleted without lxreview uninstall."]
+    stops = leftover_services(root)
+    if stops:
+        lines += ["Its services are still running and keep writing there. Stop them with:"]
+        lines += ["  " + command for command in stops]
+    lines += [
+        "Then remove the leftovers and rerun bootstrap:",
+        "  rm -rf " + shlex.quote(str(root)),
+    ]
+    return "\n".join(lines)
 
 
 def main():
@@ -28,10 +98,9 @@ def main():
         parser.error(
             "uv is required. Install a reviewed uv executable, then rerun; no shell profiles are modified"
         )
-    if root.exists() and any(root.iterdir()):
-        parser.error(
-            "installation root must be empty; use lxreview update for an existing installation"
-        )
+    problem = occupied(root, source)
+    if problem:
+        sys.exit(problem)
     os.umask(0o077)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root.chmod(0o700)
