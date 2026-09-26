@@ -342,7 +342,7 @@ def start_run(
         )
         if value
     }
-    config.with_choices(choices)
+    chosen = config.with_choices(choices)
     with lock(paths.root / "state/setup.lock"):
         repository = Repository(repo, paths)
         ReviewRequest(target=target, head_sha=repository.head())
@@ -374,7 +374,18 @@ def start_run(
                 store.finish("FAILED", "Persistent worker could not start; run doctor")
                 raise
         output(
-            {"run_id": store.id, "status": "QUEUED", "watch": f"lxreview watch {store.id}"}, True
+            {
+                "run_id": store.id,
+                "status": "QUEUED",
+                "watch": f"lxreview watch {store.id}",
+                # "default" leaves ChatGPT's current model and Claude Code's own choice.
+                "reviewer": {
+                    "model": chosen.reviewer.model,
+                    "reasoning_effort": chosen.reviewer.reasoning_effort,
+                },
+                "worker": {"model": chosen.worker.model, "effort": chosen.worker.effort},
+            },
+            True,
         )
 
 

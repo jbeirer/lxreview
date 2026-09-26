@@ -15,7 +15,7 @@ In a new Claude Code conversation:
 /review-loop https://github.com/owner/repository/pull/123
 ```
 
-Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). Before starting, it shows the ChatGPT models and reasoning levels your account offers and Claude's models and effort levels, with the current choice first, and starts the run with your picks. The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
+Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). By default the ChatGPT reviewer uses its highest reasoning level on ChatGPT's current model, and Claude uses Claude Code's own model and effort. Override either inline, for example `/review-loop model sol`, `/review-loop effort medium claude opus` or `/review-loop claude-effort max`; a model can be named by a unique part of its name. The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
 
 The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. It never modifies shell startup files or PATH. Use the absolute executable path (shown above); `lxreview` below abbreviates that path. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
 
@@ -90,8 +90,8 @@ Both reviewers can be told which model and how much reasoning to use:
 
 ```toml
 [reviewer]                           # the independent ChatGPT review
-model = "GPT-5.6 Sol"                # as ChatGPT's model picker names it; "default" keeps ChatGPT's choice
-reasoning_effort = "high"            # a level the picker offers on your plan, such as instant, medium or high
+model = "GPT-5.6 Sol"                # as ChatGPT's picker names it, or a unique part ("sol"); "default" keeps ChatGPT's choice
+reasoning_effort = "highest"         # the default: the top level your plan offers; or instant, medium, high, ...
 
 [worker]                             # Claude's evaluation, fix and commit turns
 model = "opus"                       # a Claude Code model alias or full name; "default" uses Claude Code's

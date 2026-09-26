@@ -226,19 +226,20 @@ class PlaywrightSession:
                     raise LXError(Category.PROTOCOL, "ChatGPT's reasoning slider did not move")
                 level = moved
                 levels[level[1]] = level[0]
-            while level[0].lower() != reasoning_effort.lower() and level[1] < level[2]:
+            highest = reasoning_effort.lower() == "highest"
+            while (highest or level[0].lower() != reasoning_effort.lower()) and level[1] < level[2]:
                 moved = await self._step(page, slider, "ArrowRight", level)
                 if moved == level:
-                    break
+                    # Stuck below the top: never mistake this level for the wanted one.
+                    await self._restore(page, slider, level, start)
+                    raise LXError(Category.PROTOCOL, "ChatGPT's reasoning slider did not move")
                 level = moved
                 levels[level[1]] = level[0]
+            if highest:
+                reasoning_effort = level[0]
             if level[0].lower() != reasoning_effort.lower():
                 # Leave the user's level as it was.
-                while level[1] > start[1]:
-                    moved = await self._step(page, slider, "ArrowLeft", level)
-                    if moved == level:
-                        break
-                    level = moved
+                await self._restore(page, slider, level, start)
                 await self._close_picker(page)
                 offered = ", ".join(levels[i].lower() for i in sorted(levels))
                 raise LXError(
@@ -263,13 +264,20 @@ class PlaywrightSession:
                 (await options.nth(i).locator("span").first.inner_text()).strip()
                 for i in range(await options.count())
             ]
-            wanted = [i for i, name in enumerate(names) if name.lower() == model.lower()]
-            if not wanted:
+            # An exact name, or a part of exactly one name ("sol" for "GPT-5.6 Sol").
+            wanted = [i for i, name in enumerate(names) if name.lower() == model.lower()] or [
+                i for i, name in enumerate(names) if model.lower() in name.lower()
+            ]
+            if len(wanted) != 1:
                 await self._close_picker(page)
+                matches = [names[i] for i in wanted] or names
                 raise LXError(
                     Category.CONFIG,
-                    f"ChatGPT offers no model named {model!r} here; available: {', '.join(names)}",
+                    f"ChatGPT model {model!r} is "
+                    + ("ambiguous" if wanted else "not offered here")
+                    + f"; choose one of: {', '.join(matches)}",
                 )
+            model = names[wanted[0]]
             option = options.nth(wanted[0])
             if await option.get_attribute("aria-checked") != "true":
                 await option.click()
@@ -372,8 +380,22 @@ class PlaywrightSession:
         return picker
 
     async def _open_picker(self, page: Any, picker: Any) -> None:
-        await picker.click()
-        await page.locator(SELECTORS["picker_menu"]).first.wait_for(state="visible", timeout=5000)
+        # A transient hint or toast can cover the picker; dismiss it and retry briefly
+        # instead of waiting out Playwright's default click timeout.
+        for attempt in range(3):
+            try:
+                await picker.click(timeout=5000)
+                await page.locator(SELECTORS["picker_menu"]).first.wait_for(
+                    state="visible", timeout=5000
+                )
+                return
+            except Exception:
+                if attempt == 2:
+                    raise LXError(
+                        Category.PROTOCOL, "ChatGPT's model picker did not open"
+                    ) from None
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(500)
 
     async def _close_picker(self, page: Any) -> None:
         for _ in range(3):
@@ -383,10 +405,26 @@ class PlaywrightSession:
             await page.wait_for_timeout(200)
         raise LXError(Category.PROTOCOL, "ChatGPT's model picker did not close")
 
+    async def _restore(
+        self, page: Any, slider: Any, level: tuple[str, int, int], start: tuple[str, int, int]
+    ) -> None:
+        """Best effort: move the slider back to where the user had it."""
+        try:
+            while level[1] != start[1]:
+                moved = await self._step(
+                    page, slider, "ArrowLeft" if level[1] > start[1] else "ArrowRight", level
+                )
+                if moved == level:
+                    return
+                level = moved
+        except Exception:
+            return
+
     async def _step(
         self, page: Any, slider: Any, key: str, level: tuple[str, int, int]
     ) -> tuple[str, int, int]:
         """Move the slider one level; an unchanged status after a moment means the end."""
+        await slider.focus()
         await page.keyboard.press(key)
         for _ in range(15):
             moved = await self._effort(page, slider)

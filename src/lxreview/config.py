@@ -20,11 +20,11 @@ class Strict(BaseModel):
 class ReviewerConfig(Strict):
     backend: Literal["chatgpt-web"] = "chatgpt-web"
     provider: Literal["chatgpt"] = "chatgpt"
-    # As ChatGPT's model picker names them, for example "GPT-5.6 Sol" and "high"
-    # (the levels your plan offers, such as instant, medium, high); "default" keeps
-    # ChatGPT's current choice.
+    # As ChatGPT's model picker names them: a model such as "GPT-5.6 Sol" (or a unique part
+    # of its name, "sol") and a level your plan offers, such as instant, medium or high.
+    # "highest" is the top level offered; "default" keeps ChatGPT's current choice.
     model: str = Field(default="default", pattern=MODEL_NAME)
-    reasoning_effort: str = Field(default="default", pattern=EFFORT_NAME)
+    reasoning_effort: str = Field(default="highest", pattern=EFFORT_NAME)
 
 
 class WorkerConfig(Strict):

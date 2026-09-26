@@ -178,7 +178,8 @@ async def test_default_choices_leave_the_picker_closed(chatgpt):
 @pytest.mark.parametrize(
     ("model", "effort", "message"),
     [
-        ("GPT-9", "default", "available: GPT-5.6 Sol, GPT-5.5"),
+        ("GPT-9", "default", "not offered here; choose one of: GPT-5.6 Sol, GPT-5.5"),
+        ("gpt", "default", "ambiguous; choose one of: GPT-5.6 Sol, GPT-5.5"),
         ("default", "heavy", "available: instant, medium, high"),
     ],
 )
@@ -209,3 +210,19 @@ async def test_options_lists_models_and_levels_without_changing_them(chatgpt):
     }
     assert await picked(session) == "medium"
     assert (await session.state())["user_messages"] == 0
+
+
+async def test_highest_level_and_short_model_names(chatgpt):
+    session = await chatgpt()
+    assert await session.configure("5.5", "highest") == {
+        "chatgpt_model": "GPT-5.5",
+        "chatgpt_reasoning": "high",
+    }
+    assert (await session.configure("sol", "default"))["chatgpt_model"] == "GPT-5.6 Sol"
+
+
+async def test_highest_is_never_a_level_the_slider_got_stuck_on(chatgpt):
+    session = await chatgpt("stuck-up")
+    with pytest.raises(LXError, match="did not move") as caught:
+        await session.configure("default", "highest")
+    assert caught.value.category == Category.PROTOCOL
