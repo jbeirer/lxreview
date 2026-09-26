@@ -141,3 +141,45 @@ def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):
     with pytest.raises(git_module.PullRefPending):
         repository.preflight("https://github.com/org/repo/pull/12")
     assert repository.preflight("https://github.com/org/repo/pull/12", settle=60)["head"] == head
+
+
+def test_sandbox_placeholders_stay_out_of_git_status_only_during_a_run(repo):
+    repository, git = repo
+    exclude = repository.path / ".git/info/exclude"
+    exclude.write_text("# the user's own rule\n*.log\n")
+    (repository.path / ".vscode").mkdir()
+    (repository.path / ".vscode/settings.json").write_text("{}")
+    leftover = repository.path / ".zshrc"
+    leftover.touch()
+    leftover.chmod(0o444)
+
+    def untracked():
+        return {line[3:] for line in git("status", "--porcelain").splitlines()}
+
+    with repository.placeholders_hidden():
+        # What the sandbox mounts while a command runs.
+        (repository.path / ".bashrc").touch()
+        (repository.path / ".claude").mkdir()
+        (repository.path / ".claude/settings.json").touch()
+        (repository.path / ".mcp.json").touch()
+        # The user's own untracked .vscode stays visible; placeholders do not.
+        assert untracked() == {".vscode/"}
+        for name in (".bashrc", ".claude/settings.json", ".mcp.json"):
+            (repository.path / name).unlink()
+    assert exclude.read_text() == "# the user's own rule\n*.log\n"
+    assert untracked() == {".vscode/", ".zshrc"}
+
+
+def test_git_dash_c_is_accepted_only_for_the_repository(repo, tmp_path):
+    repository, _ = repo
+
+    def command(text, phase="edit"):
+        return allowed(
+            {"tool_name": "Bash", "tool_input": {"command": text}}, repository.path, phase
+        )[0]
+
+    assert command(f"git -C {repository.path} diff")
+    assert command(f"git -C {repository.path} status --porcelain", "publish")
+    assert push(f"git -C {repository.path} push origin HEAD:refs/heads/feature", repository)
+    assert not command(f"git -C {tmp_path} diff")
+    assert not command(f"git -C {repository.path} reset --hard")

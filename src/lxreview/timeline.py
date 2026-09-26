@@ -25,10 +25,44 @@ def shorten(text: object, limit: int = 100) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def claude_activity(event: dict, limit: int = 100) -> list[str]:
+def result_text(block: dict) -> str:
+    detail = block.get("content")
+    if isinstance(detail, list):
+        detail = " ".join(str(d.get("text", "")) for d in detail if isinstance(d, dict))
+    return str(detail or "")
+
+
+def guard_refusal(block: dict) -> bool:
+    """The worker guard declined a tool call. That is policy, not a failure: Claude reads
+    the reason and adapts, so the timeline leaves both the call and the refusal out."""
+    return (
+        block.get("type") == "tool_result"
+        and bool(block.get("is_error"))
+        and result_text(block).startswith("PreToolUse:")
+    )
+
+
+def refused_calls(events: list[dict]) -> set[str]:
+    ids = set()
+    for event in events:
+        content = ((event.get("event") or {}).get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and guard_refusal(block):
+                ids.add(str(block.get("tool_use_id")))
+    return ids
+
+
+def claude_activity(event: dict, limit: int = 100, hidden: set[str] | None = None) -> list[str]:
     """Summarize one Claude stream-json event: what Claude says, edits, shell commands,
-    refusals and turn ends. Thinking never reaches the timeline; redaction removed it."""
+    failures, long-running commands and turn ends. Thinking never reaches the timeline;
+    redaction removed it."""
     kind = event.get("type")
+    if kind == "tool_progress":
+        seconds = event.get("elapsed_time_seconds")
+        # Claude Code reports a running command every 30 s; one line per minute is enough.
+        if event.get("heartbeat") and isinstance(seconds, int) and seconds and seconds % 60 == 0:
+            return [f"  still running ({seconds // 60} min)"]
+        return []
     if kind == "result":
         seconds = (event.get("duration_ms") or 0) / 1000
         return [
@@ -48,23 +82,23 @@ def claude_activity(event: dict, limit: int = 100) -> list[str]:
             if text := " ".join(str(block.get("text", "")).split()):
                 lines.append(f"Claude: {shorten(text, 3 * limit)}")
         elif block.get("type") == "tool_use":
+            if str(block.get("id")) in (hidden or set()):
+                continue
             name = block.get("name")
             if name in ("Edit", "Write", "MultiEdit"):
                 lines.append(f"Editing {data.get('file_path', '?')}")
             elif name == "Bash":
                 lines.append(f"$ {shorten(data.get('command', ''), limit)}")
         elif block.get("type") == "tool_result" and block.get("is_error"):
-            detail = block.get("content")
-            if isinstance(detail, list):
-                detail = " ".join(str(d.get("text", "")) for d in detail if isinstance(d, dict))
-            lines.append(f"Tool refused/failed: {shorten(detail, limit)}")
+            if not guard_refusal(block):
+                lines.append(f"Failed: {shorten(result_text(block), limit)}")
     return lines
 
 
-def describe(event: dict, limit: int = 100) -> list[str]:
+def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> list[str]:
     kind, n = event.get("kind"), event.get("pass_number", "?")
     if kind == "claude":
-        texts = claude_activity(event.get("event") or {}, limit)
+        texts = claude_activity(event.get("event") or {}, limit, hidden)
     elif kind == "run_created":
         texts = ["Run created"]
     elif kind == "resumed":
@@ -103,3 +137,40 @@ def describe(event: dict, limit: int = 100) -> list[str]:
     else:
         texts = [str(kind)]
     return [f"{clock(event.get('time', ''))}  {text}" for text in texts]
+
+
+def render(events: list[dict], limit: int = 100) -> list[str]:
+    """Timeline lines for a batch of events, without guard-refused calls."""
+    hidden = refused_calls(events)
+    return [line for event in events for line in describe(event, limit, hidden)]
+
+
+def style(text: str) -> str:
+    """Terminal style for one timeline text (the part after the clock)."""
+    rules = (
+        ("Claude: ", "cyan"),
+        ("ACCEPTED", "bold green"),
+        ("REJECTED", "bold yellow"),
+        ("  because ", "dim"),
+        ("  still running", "dim"),
+        ("$ ", "bright_black"),
+        ("Editing ", "magenta"),
+        ("Failed: ", "red"),
+        ("Tests PASS", "bold green"),
+        ("Tests FAIL", "bold red"),
+        ("  ", "dim"),
+        ("Commit ", "bold green"),
+        ("Finished: CLEAN", "bold green"),
+        ("Finished: MAX_PASSES", "bold yellow"),
+        ("Finished: ", "bold red"),
+        ("Claude turn failed", "red"),
+        ("Claude turn done", "dim"),
+    )
+    for prefix, value in rules:
+        if text.startswith(prefix):
+            return value
+    if text.startswith("Reviewer pass") and "complete" in text:
+        return "bold green" if "CLEAN" in text else "bold yellow"
+    if text.startswith(("Reviewer pass", "Evaluation:")):
+        return "bold"
+    return ""

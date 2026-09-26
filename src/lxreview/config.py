@@ -1,7 +1,7 @@
 import os
 import tomllib
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -34,6 +34,8 @@ class ReviewConfig(Strict):
     max_passes: int = Field(default=5, ge=1, le=20)
     timeout: float = Field(default=600, ge=5, le=1800)
     worker_timeout: float = Field(default=3600, ge=30, le=14400)
+    # pytest-xdist workers for full test runs: "auto" (one per CPU), a count, or "off".
+    test_workers: Literal["auto", "off"] | Annotated[int, Field(ge=1, le=1024)] = "auto"
 
 
 class RuntimeConfig(Strict):

@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
 import signal
+import tempfile
 import time
 from pathlib import Path
 from typing import Literal
@@ -177,16 +179,26 @@ async def claude_turn(
     if phase != "publish":
         child_environment.pop("SSH_AUTH_SOCK", None)
         child_environment.pop("KRB5CCNAME", None)
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=repo,
-        env=child_environment,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-        limit=4 * 1024 * 1024,
-    )
+    # The sandbox reaches its network proxy through a socket under TMPDIR. Below the
+    # installation root (read-only to sandboxed commands) the socket is unreachable and every
+    # push fails with "Proxy CONNECT aborted"; a short path also stays within the socket
+    # path limit. mkdtemp creates the directory 0700.
+    scratch = tempfile.mkdtemp(prefix="lxreview-", dir="/tmp")
+    child_environment["TMPDIR"] = scratch
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=repo,
+            env=child_environment,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+            limit=4 * 1024 * 1024,
+        )
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
     result = None
 
     async def stderr():
@@ -262,7 +274,23 @@ async def claude_turn(
                 await err_task
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(process.wait(), 5)
+            shutil.rmtree(scratch, ignore_errors=True)
             store.update(claude_pid=None)
+
+
+def command_guidance(config: Config) -> str:
+    """How the edit turn should run commands, so the guard has nothing to refuse."""
+    text = (
+        " Commands run in the repository root: use relative paths and plain `git ...`. Search"
+        " and read files with the Grep, Glob and Read tools; grep, find and sed are unavailable."
+    )
+    workers = config.review.test_workers
+    if workers != "off":
+        text += (
+            f" When the project has pytest-xdist, run the full test suite with `-n {workers}`"
+            " (focused runs of a few tests need no -n); without pytest-xdist run it serially."
+        )
+    return text
 
 
 async def settled_preflight(repo: Repository, target: str, settle: float = 60) -> dict:
@@ -283,7 +311,11 @@ async def execute(
     state = store.load()
     repo = Repository(Path(state["repo"]), paths)
     try:
-        with lock(repo.audit_root() / "worker.lock"), lock(paths.root / "state/reviewer.lock"):
+        with (
+            lock(repo.audit_root() / "worker.lock"),
+            lock(paths.root / "state/reviewer.lock"),
+            repo.placeholders_hidden(),
+        ):
             for number in range(state["completed_pass"] + 1, state["max_passes"] + 1):
                 if (store.directory / "cancel").exists():
                     store.finish("CANCELLED")
@@ -404,7 +436,9 @@ async def execute(
                         paths,
                         config,
                         store,
-                        "Fix only these accepted findings with minimal relevant changes. Run relevant tests and inspect the diff. Do not stage, commit or push in this turn. Stop on failed tests. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled. Use one literal shell command per call; Python only via python -m pytest (use .venv/bin/python -m pytest when the repository has that environment). Return exact test commands/results, tests_passed and a concise summary.\n\n"
+                        "Fix only these accepted findings with minimal relevant changes. Run relevant tests and inspect the diff. Do not stage, commit or push in this turn. Stop on failed tests. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled. Use one literal shell command per call; Python only via python -m pytest (use .venv/bin/python -m pytest when the repository has that environment). Return exact test commands/results, tests_passed and a concise summary."
+                        + command_guidance(config)
+                        + "\n\n"
                         + json.dumps([d.model_dump() for d in accepted]),
                         EditResult,
                         read_only=False,
@@ -454,6 +488,12 @@ async def execute(
                 assert isinstance(published, PublishResult)
                 fixes = FixResult(**fixes.model_dump(), **published.model_dump())
                 write_json(pass_dir / "metadata.json", redact(fixes.model_dump()))
+                if not fixes.pushed:
+                    raise LXError(
+                        Category.PROTOCOL,
+                        f"Push failed; commit {fixes.commit[:10]} exists only locally. "
+                        "Inspect the run logs, push it yourself, then resume",
+                    )
                 repo.verify_identity(state["identity"])
                 after = await settled_preflight(repo, state["target"])
                 atomic_write(

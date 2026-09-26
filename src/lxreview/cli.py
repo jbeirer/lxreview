@@ -386,39 +386,59 @@ def watch(
         if raw:
             raise LXError(Category.CONFIG, "Choose --chat or --raw")
         return _watch_chat(run_id, after)
-    from .timeline import PHASES, describe
+    from .timeline import PHASES, render, style
 
     paths, config = context()
     store = RunStore(paths, run_id)
     offset, shown = 0, None
+
+    def show(lines: list[str]) -> None:
+        if not lines:
+            return
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(style="dim", no_wrap=True)
+        grid.add_column(overflow="fold")
+        for line in lines:
+            clock, _, text = line.partition("  ")
+            grid.add_row(clock, Text(text, style=style(text)))
+        console.print(grid)
+
     try:
         state = store.observed(config)
         if not raw:
             for label, value in (("LXReview", store.id), ("PR", state["target"])):
-                console.print(f"{label:<9} {value}", markup=False)
+                console.print(Text(f"{label:<9} ", style="bold") + Text(value))
             if state.get("observation"):
                 console.print(state["observation"], markup=False)
         while True:
+            events = []
             with (store.directory / "events.jsonl").open() as stream:
                 stream.seek(offset)
                 # A line without its newline is still being written; resume there next time.
                 while (line := stream.readline()).endswith("\n"):
                     offset = stream.tell()
                     try:
-                        event = json.loads(line)
+                        events.append(json.loads(line))
                     except ValueError:
                         continue
                     if raw:
                         typer.echo(line.rstrip("\n"))
-                    else:
-                        for text in describe(event):
-                            console.print(text, markup=False)
+            if not raw:
+                show(render(events, limit=240))
             current = (state["status"], state["pass"], state["phase"])
             if not raw and current != shown:
+                colour = {"RUNNING": "bold blue", "CLEAN": "bold green", "QUEUED": "bold"}.get(
+                    state["status"],
+                    "bold yellow" if state["status"] == "MAX_PASSES" else "bold red",
+                )
                 console.print(
-                    f"{'Status':<9} {state['status']}  pass {state['pass']}/{state['max_passes']}"
-                    f"  ({PHASES.get(state['phase'], state['phase'])})",
-                    markup=False,
+                    Text(f"{'Status':<9} ", style="bold")
+                    + Text(state["status"], style=colour)
+                    + Text(
+                        f"  pass {state['pass']}/{state['max_passes']}"
+                        f"  ({PHASES.get(state['phase'], state['phase'])})",
+                        style="dim",
+                    )
                 )
                 shown = current
             if once or state["status"] in TERMINAL:
@@ -436,7 +456,7 @@ CHAT_POLL_SECONDS = 5
 
 
 def _watch_chat(run_id: str, after: int) -> None:
-    from .timeline import PHASES, describe
+    from .timeline import PHASES, render
 
     paths, config = context()
     store = RunStore(paths, run_id)
@@ -451,7 +471,7 @@ def _watch_chat(run_id: str, after: int) -> None:
     if after == 0:
         emit([f"LXReview {store.id} for {state['target']}"])
     while True:
-        lines = []
+        events = []
         with (store.directory / "events.jsonl").open() as stream:
             stream.seek(offset)
             while (line := stream.readline()).endswith("\n"):
@@ -460,9 +480,10 @@ def _watch_chat(run_id: str, after: int) -> None:
                 if seen <= after:
                     continue
                 try:
-                    lines += describe(json.loads(line), limit=240)
+                    events.append(json.loads(line))
                 except ValueError:
                     continue
+        lines = render(events, limit=240)
         current = (state["status"], state["pass"], state["phase"])
         status = (
             f"Status {state['status']}, pass {state['pass']}/{state['max_passes']}"

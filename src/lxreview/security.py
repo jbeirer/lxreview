@@ -147,6 +147,14 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
     if any(x in command.lower() for x in ("--no-verify", "--force", "--hard", "core.hookspath")):
         return False, "Destructive git operations and hook bypass are blocked"
     exe = args[0]
+    # `git -C <repo>` is plain git in the repository; any other directory stays refused.
+    if (
+        exe == "git"
+        and len(args) > 2
+        and args[1] == "-C"
+        and Path(args[2]).expanduser().resolve() == repo.resolve()
+    ):
+        args = [exe, *args[3:]]
     if exe in (
         ".venv/bin/python",
         ".venv/bin/python3",

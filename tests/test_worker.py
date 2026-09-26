@@ -1,3 +1,4 @@
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,9 @@ class Repo:
 
     def verify_identity(self, identity):
         pass
+
+    def placeholders_hidden(self):
+        return contextlib.nullcontext()
 
     def preflight(self, target):
         return {
@@ -311,3 +315,16 @@ async def test_settled_preflight_retries_pull_ref_lag(monkeypatch):
     monkeypatch.setattr(worker.asyncio, "sleep", no_sleep)
     assert (await worker.settled_preflight(Lagging(), "t"))["head"] == "c" * 40
     assert len(attempts) == 3
+
+
+@pytest.mark.parametrize(
+    ("workers", "expected"), [("auto", "`-n auto`"), (8, "`-n 8`"), ("off", None)]
+)
+def test_edit_turn_names_the_test_worker_count(workers, expected):
+    from lxreview.worker import command_guidance
+
+    config = Config()
+    config.review.test_workers = workers
+    text = command_guidance(config)
+    assert "Grep, Glob and Read tools" in text
+    assert (expected in text) if expected else "-n" not in text

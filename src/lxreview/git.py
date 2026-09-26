@@ -1,9 +1,11 @@
 import re
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from .errors import Category, LXError
-from .paths import Paths
+from .paths import Paths, atomic_write
 from .process import binary, run
 
 
@@ -17,6 +19,61 @@ FORBIDDEN = re.compile(
     r"remote\.pushdefault|url\..*\.(pushinsteadof|insteadof)|"
     r"push\.(followtags|recursesubmodules)|core\.hookspath|diff\.external|diff\..*\.(command|textconv))$"
 )
+
+
+# Claude Code's Linux sandbox mounts /dev/null at each of these repository paths that does
+# not exist yet, so a sandboxed command cannot create them; the empty placeholders appear on
+# the host while the command runs (observed with Claude Code 2.1.283).
+SANDBOX_PLACEHOLDERS = (
+    ".bash_profile",
+    ".bashrc",
+    ".claude/agents",
+    ".claude/commands",
+    ".claude/hooks",
+    ".claude/launch.json",
+    ".claude/loop.md",
+    ".claude/output-styles",
+    ".claude/routines",
+    ".claude/scheduled_tasks.json",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/skills",
+    ".claude/workflows",
+    ".gitconfig",
+    ".gitmodules",
+    ".idea",
+    ".mcp.json",
+    ".profile",
+    ".ripgreprc",
+    ".vscode",
+    ".zprofile",
+    ".zshrc",
+)
+EXCLUDE_BEGIN = "# >>> lxreview: sandbox placeholders during a run (removed when it ends)"
+EXCLUDE_END = "# <<< lxreview"
+
+
+def without_exclude_block(text: str) -> str:
+    lines, inside = [], False
+    for line in text.splitlines(keepends=True):
+        if line.rstrip("\n") == EXCLUDE_BEGIN:
+            inside = True
+        elif inside and line.rstrip("\n") == EXCLUDE_END:
+            inside = False
+        elif not inside:
+            lines.append(line)
+    return "".join(lines)
+
+
+def placeholder_leftover(path: Path) -> bool:
+    """An empty read-only file at a placeholder path, as a killed sandbox command leaves it."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return (
+        path.is_file() and not path.is_symlink() and info.st_size == 0 and not info.st_mode & 0o222
+    )
 
 
 def unsafe_push_keys(listing: str) -> list[str]:
@@ -41,6 +98,43 @@ class Repository:
             Path(self.call("rev-parse", "--path-format=absolute", "--git-common-dir"))
             / "review-loop"
         )
+
+    def _exclude_file(self) -> Path:
+        return Path(self.call("rev-parse", "--path-format=absolute", "--git-path", "info/exclude"))
+
+    def hide_sandbox_placeholders(self) -> None:
+        """Keep the sandbox's temporary placeholders out of git status for this run.
+
+        Only paths that do not exist yet (or hold a leftover placeholder) are listed, so an
+        untracked file of the user's own stays visible.
+        """
+        names = [
+            name
+            for name in SANDBOX_PLACEHOLDERS
+            if not (self.path / name).exists() or placeholder_leftover(self.path / name)
+        ]
+        exclude = self._exclude_file()
+        text = without_exclude_block(exclude.read_text() if exclude.exists() else "")
+        if text and not text.endswith("\n"):
+            text += "\n"
+        block = [EXCLUDE_BEGIN, *(f"/{name}" for name in names), EXCLUDE_END]
+        mode = exclude.stat().st_mode & 0o777 if exclude.exists() else 0o644
+        atomic_write(exclude, text + "\n".join(block) + "\n", mode)
+
+    def show_sandbox_placeholders(self) -> None:
+        exclude = self._exclude_file()
+        if exclude.exists():
+            text = exclude.read_text()
+            if (kept := without_exclude_block(text)) != text:
+                atomic_write(exclude, kept, exclude.stat().st_mode & 0o777)
+
+    @contextmanager
+    def placeholders_hidden(self) -> Iterator[None]:
+        self.hide_sandbox_placeholders()
+        try:
+            yield
+        finally:
+            self.show_sandbox_placeholders()
 
     def check_push_policy(self) -> None:
         result = run([self.git, "config", "--null", "--list"], self.paths, cwd=self.path)

@@ -37,6 +37,10 @@ assert settings['hooks']['PreToolUse'][0]['matcher']=='.*'
 # Glob Read rules expand into one sandbox mount per file on Linux (E2BIG with a large .git).
 assert not any(rule.startswith('Read(') for rule in settings['permissions']['deny'])
 assert settings['attribution'] is False
+import os
+# The sandbox proxy socket lives in TMPDIR; it must be short and outside the read-only root.
+assert os.environ['TMPDIR'].startswith('/tmp/lxreview-') and os.path.isdir(os.environ['TMPDIR'])
+open(os.path.join(os.environ['LXREVIEW_HOME'], 'turn-tmpdir'), 'w').write(os.environ['TMPDIR'])
 sys.stdin.read()
 print(json.dumps({'type':'system','session_id':str(uuid.uuid4())}),flush=True)
 print(json.dumps({'type':'assistant','message':{'content':[{'type':'thinking','thinking':'PRIVATE_REASONING'},{'type':'text','text':'Checking evidence; Bearer private-token'}]}}),flush=True)
@@ -52,6 +56,7 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':{'finding
     log = (store.directory / "stdout.log").read_text()
     assert "PRIVATE_REASONING" not in log and "private-token" not in log
     assert store.load()["claude_pid"] is None
+    assert not Path((paths.root / "turn-tmpdir").read_text()).exists()
 
 
 async def test_cancel_terminates_owned_child(paths, store, tmp_path):

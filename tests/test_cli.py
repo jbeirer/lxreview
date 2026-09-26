@@ -126,6 +126,74 @@ def test_watch_renders_readable_timeline(paths, tmp_path, monkeypatch):
     ]
 
 
+def test_timeline_hides_guard_refusals_and_names_real_failures():
+    from lxreview.timeline import render, style
+
+    def claude(role, *blocks):
+        return {
+            "kind": "claude",
+            "time": "",
+            "event": {"type": role, "message": {"content": list(blocks)}},
+        }
+
+    events = [
+        claude(
+            "assistant",
+            {
+                "type": "tool_use",
+                "id": "t1",
+                "name": "Bash",
+                "input": {"command": "grep -rn x src"},
+            },
+        ),
+        claude(
+            "user",
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "is_error": True,
+                "content": "PreToolUse:Bash hook error: [guard]: Command is outside the worker allowlist",
+            },
+        ),
+        claude(
+            "assistant",
+            {
+                "type": "tool_use",
+                "id": "t2",
+                "name": "Bash",
+                "input": {"command": "git push origin HEAD:refs/heads/f"},
+            },
+        ),
+        claude(
+            "user",
+            {
+                "type": "tool_result",
+                "tool_use_id": "t2",
+                "is_error": True,
+                "content": "Exit code 128 fatal: unable to access",
+            },
+        ),
+        {
+            "kind": "claude",
+            "time": "",
+            "event": {"type": "tool_progress", "heartbeat": True, "elapsed_time_seconds": 30},
+        },
+        {
+            "kind": "claude",
+            "time": "",
+            "event": {"type": "tool_progress", "heartbeat": True, "elapsed_time_seconds": 120},
+        },
+    ]
+    texts = [line.split("  ", 1)[1] for line in render(events)]
+    assert texts == [
+        "$ git push origin HEAD:refs/heads/f",
+        "Failed: Exit code 128 fatal: unable to access",
+        "  still running (2 min)",
+    ]
+    assert style("Failed: x") == "red" and style("ACCEPTED  S1 x") == "bold green"
+    assert style("Reviewer pass 1 complete, CLEAN") == "bold green"
+
+
 def test_chat_watch_ends_before_the_monitor_limit_and_names_the_continuation(
     paths, tmp_path, monkeypatch
 ):
