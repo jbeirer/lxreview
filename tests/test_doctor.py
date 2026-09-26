@@ -78,3 +78,28 @@ async def test_doctor_checks_actual_runtimes_not_just_record(paths, monkeypatch)
     assert checks["Chrome"]["status"] == "FAIL"
     assert checks["Playwright"]["status"] == "PASS"
     assert "Node" not in checks
+
+
+async def test_doctor_reports_the_claude_login(paths, monkeypatch):
+    import json
+
+    claude = paths.root / "claude-bin"
+    claude.write_text("")
+    claude.chmod(0o700)
+    config = Config()
+    config.runtime.claude = str(claude)
+
+    def run(argv, *a, **k):
+        if argv[1:] == ["auth", "status", "--json"]:
+            status = {"loggedIn": False, "authMethod": "none", "email": "hidden@example.org"}
+            return subprocess.CompletedProcess(argv, 1, json.dumps(status), "")
+        return subprocess.CompletedProcess(argv, 1, "", "")
+
+    monkeypatch.setattr("lxreview.doctor.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("lxreview.doctor.run", run)
+    monkeypatch.setattr("lxreview.doctor.browser", lambda *a: Browser())
+    monkeypatch.setattr("lxreview.doctor.psutil.net_connections", lambda **k: [])
+    checks = {c["check"]: c for c in await diagnose(paths, config, smoke=False)}
+    assert checks["Claude Code"]["status"] == "FAIL"
+    assert "claude auth login" in checks["Claude Code"]["detail"]
+    assert "hidden@example.org" not in json.dumps(checks)

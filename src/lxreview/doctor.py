@@ -41,12 +41,26 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
         not violations,
         "Private state modes" if not violations else ", ".join(violations[:5]),
     )
-    add(
-        "Claude Code",
-        config.role == "workstation"
-        or (Path(config.runtime.claude).is_file() and os.access(config.runtime.claude, os.X_OK)),
-        "Run setup to discover the installed Claude executable",
-    )
+    if config.role == "workstation":
+        add("Claude Code", True, "Not required on the workstation")
+    elif not (Path(config.runtime.claude).is_file() and os.access(config.runtime.claude, os.X_OK)):
+        add("Claude Code", False, "Run setup to discover the installed Claude executable")
+    else:
+        try:
+            result = run(
+                [config.runtime.claude, "auth", "status", "--json"], paths, check=False, timeout=20
+            )
+            auth = json.loads(result.stdout)
+            # Claude Code renews its token itself, so there is no expiry to report.
+            add(
+                "Claude Code",
+                auth.get("loggedIn") is True,
+                f"Logged in via {auth.get('authMethod')} ({auth.get('subscriptionType')})"
+                if auth.get("loggedIn") is True
+                else "Not logged in; run claude auth login",
+            )
+        except (LXError, OSError, ValueError, TimeoutError, AttributeError):
+            add("Claude Code", False, "Could not read Claude login status; run claude auth status")
     integration = paths.root / "state/claude-integration.json"
     try:
         owned = json.loads(integration.read_text())

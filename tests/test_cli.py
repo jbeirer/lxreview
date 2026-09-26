@@ -132,6 +132,15 @@ class LoginSession:
     async def query(self, prompt, timeout):
         return prompt.removeprefix("Reply exactly ")
 
+    async def health(self):
+        import time
+
+        from lxreview.contracts import Health
+
+        return Health(
+            ready=True, detail="ready", metadata={"session_expires": time.time() + 90.5 * 86400}
+        )
+
 
 def run_login(paths, monkeypatch, misses, stalls=None, running=True):
     import asyncio
@@ -173,7 +182,7 @@ def test_login_shows_copyable_steps_once(paths, monkeypatch):
     assert "vncsecret" not in text
     # Commands stay on one physical line even when the launcher path is long.
     assert any(line.strip() == f"{paths.executable} desktop password" for line in text.splitlines())
-    assert "ChatGPT login verified" in text
+    assert "ChatGPT login verified · valid until" in text and "(90 days)" in text
     # PATH is never modified, so every pasteable command names the launcher itself.
     assert f"Next: {paths.executable} doctor" in text
 

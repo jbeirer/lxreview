@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   A stand-in for chatgpt.com that reproduces only the markup LXReview relies on, as
-  observed on 2026-09-26. Scenarios: ?scenario=logged-out|captcha|error|multi|mangle
+  observed on 2026-09-26. Scenarios: ?scenario=logged-out|captcha|error|multi|mangle|stuck
 -->
 <html>
 <head>
@@ -42,7 +42,13 @@
 
     composer.addEventListener('input', () => {
       if (scenario === 'mangle') composer.textContent = composer.textContent.toUpperCase();
-      send.disabled = !composer.innerText.trim();
+      send.disabled = scenario === 'stuck' || !composer.innerText.trim();
+    });
+
+    composer.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.shiftKey) return;
+      event.preventDefault();
+      if (!send.disabled) send.click();
     });
 
     const replyFor = (text) => {

@@ -70,6 +70,12 @@ PAGE_STATE = r"""(s) => {
 }"""
 
 
+def validity(expires: float) -> str:
+    days = int((expires - time.time()) // 86400)
+    when = time.strftime("%Y-%m-%d", time.localtime(expires))
+    return f"valid until {when} ({days} day{'s' if days != 1 else ''})"
+
+
 class PlaywrightSession:
     """One ChatGPT tab in an LXReview-owned Chrome; the browser service serializes calls."""
 
@@ -164,14 +170,18 @@ class PlaywrightSession:
         await composer.fill(prompt, timeout=10000)
         if (await self.state())["prompt"] != prompt.strip():
             raise LXError(Category.PROTOCOL, "Prompt readback differs; submission refused")
-        send = page.locator(SELECTORS["send"]).locator("visible=true").first
-        try:
-            # Playwright clicks only an enabled, stable, unobscured button.
-            await send.click(timeout=10000, no_wait_after=True)
-        except Exception as exc:
-            raise LXError(
-                Category.PROTOCOL, "Send button was not clickable; nothing was sent"
-            ) from exc
+        # An enabled Send button shows ChatGPT has registered the typed prompt.
+        ready = time.monotonic() + 10
+        while (await self.state())["send"] != "enabled":
+            if time.monotonic() >= ready:
+                raise LXError(
+                    Category.PROTOCOL, "ChatGPT did not accept the typed prompt; nothing was sent"
+                )
+            await asyncio.sleep(0.25)
+        # Enter in the focused composer, not a click: ChatGPT swaps the Send button as soon as
+        # it fires, which made click retries report failure after the prompt had been sent.
+        # From here on only the prompt appearing in the chat decides the outcome.
+        await composer.press("Enter", no_wait_after=True)
         accepted = time.monotonic() + 15
         while (await self.state())["user_messages"] <= before["user_messages"]:
             if time.monotonic() >= accepted:
@@ -206,7 +216,21 @@ class PlaywrightSession:
         if not (await self._page()).url.startswith(self.home.split("?")[0]):
             await self.new_conversation()
         await self.ensure_ready()
-        return Health(ready=True, detail="ChatGPT logged in and composer ready")
+        expires = await self.session_expires()
+        detail = "ChatGPT logged in and composer ready"
+        if expires:
+            detail += "; session " + validity(expires)
+        return Health(ready=True, detail=detail, metadata={"session_expires": expires})
+
+    async def session_expires(self) -> float | None:
+        """When ChatGPT's session cookie expires; only the expiry is read, never the value."""
+        cookies = await self.context.cookies("https://chatgpt.com")
+        times = [
+            c["expires"]
+            for c in cookies
+            if c["name"].startswith("__Secure-next-auth.session-token") and c["expires"] > 0
+        ]
+        return min(times) if times else None
 
     async def sessions(self) -> list[dict]:
         if self.page is None or self.page.is_closed():

@@ -201,7 +201,12 @@ def doctor(
         for column in ("Check", "Status", "Details"):
             table.add_column(column)
         for check in checks:
-            table.add_row(check["check"], check["status"], check["detail"])
+            passed = check["status"] == "PASS"
+            table.add_row(
+                check["check"],
+                Text(check["status"], style="bold green" if passed else "bold red"),
+                Text(check["detail"], style="" if passed else "red"),
+            )
         console.print(table)
     if any(c["status"] == "FAIL" for c in checks):
         raise typer.Exit(1)
@@ -532,6 +537,7 @@ LOGIN_STEPS_AFTER = 15
 def login(timeout: int = 600):
     """Guide human ChatGPT login; never collect passwords, cookies or MFA codes."""
     from .backend import browser
+    from .browser.playwright import validity
     from .services import start as launch
 
     paths, config = context()
@@ -642,11 +648,17 @@ def login(timeout: int = 600):
                 raise LXError(
                     Category.PROTOCOL, "Login smoke response did not match; it was not retried"
                 )
-        return shown
+        health = await session.health()
+        return shown, health.metadata.get("session_expires")
 
     with lock(paths.root / "state/reviewer.lock"):
-        prompted = asyncio.run(wait())
-    console.print(Text("✓ ChatGPT login verified", style="bold green"))
+        prompted, expires = asyncio.run(wait())
+    console.print(
+        Text.assemble(
+            ("✓ ChatGPT login verified", "bold green"),
+            (f" · {validity(expires)}" if expires else "", "green"),
+        )
+    )
     if prompted and config.mode == "lxplus-browser":
         console.print(
             Text(
@@ -762,8 +774,10 @@ def update(source: Path | None = None, rollback: bool = False):
             raise LXError(Category.CONFIG, "Choose --source or --rollback")
         if source:
             application_update(paths, source)
+            restarted = _restart_long_running(paths, config)
             output(
                 "Application updated atomically. Run doctor; update --rollback restores the prior launcher."
+                + (f" Restarted on the new version: {', '.join(restarted)}." if restarted else "")
             )
             return
         if rollback:
@@ -777,6 +791,23 @@ def update(source: Path | None = None, rollback: bool = False):
         output(
             "Pinned runtimes verified. Use update --source /path/to/reviewed/checkout for an application upgrade."
         )
+
+
+def _restart_long_running(paths: Paths, config: Config) -> list[str]:
+    """Services keep running the code they started with; restart them after an update."""
+    from .services import start as launch
+
+    supervisor = Supervisor(paths, config)
+    restarted = []
+    if supervisor.status("browser"):
+        supervisor.stop("browser")
+        launch(paths, config)
+        restarted.append("browser service")
+    if supervisor.status("bridge"):
+        supervisor.stop("bridge")
+        supervisor.start("bridge", [str(paths.executable), "bridge-worker"])
+        restarted.append("bridge")
+    return restarted
 
 
 @app.command()

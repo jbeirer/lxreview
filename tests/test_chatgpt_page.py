@@ -5,6 +5,7 @@ executable, or install Playwright's Chromium (`playwright install chromium`).
 """
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,13 @@ async def test_altered_prompt_is_never_sent(chatgpt):
     assert (await session.state())["user_messages"] == 0
 
 
+async def test_prompt_is_not_submitted_until_chatgpt_accepts_it(chatgpt):
+    session = await chatgpt("stuck")
+    with pytest.raises(LXError, match="nothing was sent"):
+        await session.query("Reply exactly NEVER", 30)
+    assert (await session.state())["user_messages"] == 0
+
+
 async def test_closed_tab_is_reopened(chatgpt):
     session = await chatgpt()
     await session.close()
@@ -111,4 +119,21 @@ async def test_closed_tab_is_reopened(chatgpt):
 async def test_health_after_a_fresh_start_checks_chatgpt_itself(chatgpt):
     # The service opens Chrome on a blank tab; the login check must not judge that tab.
     session = await chatgpt(navigate=False)
-    assert (await session.health()).ready
+    expires = time.time() + 30.5 * 86400
+    await session.context.add_cookies(
+        [
+            {
+                "name": "__Secure-next-auth.session-token.0",
+                "value": "not-read",
+                "domain": ".chatgpt.com",
+                "path": "/",
+                "secure": True,
+                "expires": expires,
+            }
+        ]
+    )
+    health = await session.health()
+    assert health.ready
+    assert health.metadata["session_expires"] == pytest.approx(expires, abs=1)
+    assert "(30 days)" in health.detail
+    assert "not-read" not in health.detail
