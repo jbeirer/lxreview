@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from ..backend import browser, reviewer
 from ..config import Config
@@ -7,8 +7,8 @@ from ..errors import LXError
 from ..paths import Paths, lock
 
 
-def create_server(paths: Paths, config: Config) -> FastMCP:
-    server = FastMCP("lxreview-reviewer")
+def create_server(paths: Paths, config: Config) -> MCPServer:
+    server = MCPServer("lxreview-reviewer")
     session = browser(paths, config)
     backend = reviewer(paths, config)
 

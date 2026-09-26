@@ -809,7 +809,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
     { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "mcp", specifier = ">=1.12,<3" },
+    { name = "mcp", specifier = ">=2.2,<3" },
     { name = "playwright", marker = "extra == 'playwright'", specifier = ">=1.55,<2" },
     { name = "psutil", specifier = ">=7,<8" },
     { name = "pydantic", specifier = ">=2.11,<3" },
