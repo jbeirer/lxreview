@@ -1,0 +1,363 @@
+import json
+import subprocess
+import zipfile
+
+import pytest
+
+from lxreview.config import Config
+from lxreview.errors import LXError
+from lxreview.install.runtime import extract
+from lxreview.paths import write_json
+from lxreview.process import Supervisor
+from lxreview.runs import RunStore
+from lxreview.services import desktop_command
+
+
+@pytest.mark.parametrize("member", ["../outside", "/absolute"])
+def test_zip_traversal_rejected(tmp_path, member):
+    bundle = tmp_path / "bad.zip"
+    with zipfile.ZipFile(bundle, "w") as out:
+        out.writestr(member, "bad")
+    destination = tmp_path / "out"
+    destination.mkdir()
+    with pytest.raises(LXError):
+        extract(bundle, destination)
+
+
+def test_supervisor_idempotence_and_scoped_stop(paths, monkeypatch):
+    calls = []
+    active = False
+
+    def run(argv, *a, **kw):
+        nonlocal active
+        calls.append(argv)
+        code = 0
+        if "is-active" in argv:
+            code = 0 if active else 3
+        if argv[0] == "/usr/bin/systemd-run":
+            active = True
+        if "stop" in argv:
+            active = False
+        return subprocess.CompletedProcess(argv, code, "", "")
+
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("lxreview.process.run", run)
+    supervisor = Supervisor(paths, Config())
+    supervisor.start("browser", ["/owned/browser"])
+    supervisor.start("browser", ["/owned/browser"])
+    assert len([c for c in calls if c[0].endswith("systemd-run")]) == 1
+    supervisor.stop("browser")
+    supervisor.stop("browser")
+    assert len([c for c in calls if "stop" in c]) == 1
+    assert "--property=KillMode=control-group" in calls[0]
+    assert not any("pkill" in str(c) for c in calls)
+
+
+def test_stale_service_on_another_host_refuses(paths):
+    supervisor = Supervisor(paths, Config())
+    write_json(
+        paths.root / f"state/services/{supervisor.unit('browser')}.json", {"host": "another-host"}
+    )
+    with pytest.raises(LXError, match="another-host"):
+        supervisor.stop("browser")
+
+
+def test_vnc_uses_owned_config_and_loopback(paths, monkeypatch):
+    monkeypatch.setattr("lxreview.services.binary", lambda name: "/usr/bin/" + name)
+    (paths.root / "secrets/vnc-password").write_bytes(b"password")
+    config = Config()
+    # A test-only high display avoids the user's real :99 desktop.
+    config.runtime.display = 411
+    command = desktop_command(paths, config)
+    assert command[command.index("-localhost") + 1] == "yes"
+    assert str(paths.root / "state/vnc/xstartup") in command
+    assert "-fg" in command
+
+
+def test_run_id_path_traversal_rejected(paths):
+    with pytest.raises(LXError):
+        RunStore(paths, "../../secret")
+
+
+def test_reversible_claude_integration_preserves_unrelated_entries(paths, tmp_path, monkeypatch):
+    from lxreview.install import claude
+
+    home = tmp_path / "account"
+    home.mkdir()
+    original = {"mcpServers": {"other": {"command": "/other"}}, "unrelated": True}
+    file = home / ".claude.json"
+    file.write_text(json.dumps(original))
+    config = Config()
+    config.runtime.claude = "/fake/claude"
+    calls = []
+
+    def run(argv, *args, **kwargs):
+        calls.append(argv)
+        assert "--scope" in argv and "user" in argv
+        data = json.loads(file.read_text())
+        if "add-json" in argv:
+            data["mcpServers"]["lxreview-reviewer"] = json.loads(argv[-1])
+        else:
+            data["mcpServers"].pop("lxreview-reviewer")
+        file.write_text(json.dumps(data))
+
+    monkeypatch.setattr(claude, "run", run)
+    claude.install(paths, config, home)
+    claude.install(paths, config, home)
+    assert len(calls) == 1
+    assert (home / ".claude/commands/review-loop.md").is_symlink()
+    claude.uninstall(paths, config)
+    assert json.loads(file.read_text()) == original
+    assert not (home / ".claude/commands/review-loop.md").exists()
+
+
+def test_claude_collision_refused_before_mutation(paths, tmp_path):
+    from lxreview.install.claude import install
+
+    home = tmp_path / "account"
+    directory = home / ".claude/commands"
+    directory.mkdir(parents=True)
+    custom = directory / "review-show.md"
+    custom.write_text("user's own command")
+    with pytest.raises(LXError, match="not owned"):
+        install(paths, Config(), home)
+    assert custom.read_text() == "user's own command"
+    assert not (directory / "review-loop.md").exists()
+
+
+def test_existing_identical_mcp_is_not_claimed(paths, tmp_path, monkeypatch):
+    from lxreview.install import claude
+
+    home = tmp_path / "account"
+    home.mkdir()
+    original = {
+        "mcpServers": {
+            "lxreview-reviewer": {
+                "type": "stdio",
+                "command": str(paths.executable),
+                "args": ["mcp"],
+                "env": {"LXREVIEW_HOME": str(paths.root)},
+            }
+        }
+    }
+    file = home / ".claude.json"
+    file.write_text(json.dumps(original))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Preexisting registration must not be added or removed")
+
+    monkeypatch.setattr(claude, "run", forbidden)
+    claude.install(paths, Config(), home)
+    claude.uninstall(paths, Config())
+    assert json.loads(file.read_text()) == original
+
+
+def test_application_rollback_uses_private_existing_interpreter(paths):
+    from lxreview.install.updater import application_rollback
+
+    python = paths.root / "runtime/old-python"
+    python.write_text("placeholder")
+    previous = f"#!{python}\nprint('old')\n"
+    write_json(
+        paths.root / "state/application-versions.json", {"previous": previous, "current": "new"}
+    )
+    application_rollback(paths)
+    assert paths.executable.read_text() == previous
+    assert paths.executable.stat().st_mode & 0o777 == 0o700
+
+
+def test_launchd_exited_service_is_not_reported_running(paths, monkeypatch):
+    import socket
+
+    config = Config()
+    config.runtime.supervisor = "launchd"
+    supervisor = Supervisor(paths, config)
+    write_json(
+        paths.root / f"state/services/{supervisor.unit('browser')}.json", {"host": socket.getfqdn()}
+    )
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "lxreview.process.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "state = not running", ""),
+    )
+    assert not supervisor.status("browser")
+
+
+@pytest.mark.parametrize("name", ["desktop", "browser"])
+def test_vnc_and_browser_share_private_xauthority(paths, monkeypatch, name):
+    from lxreview.services import service_exec
+
+    monkeypatch.setattr("lxreview.services.desktop_command", lambda *a: ["/fake/vnc"])
+    monkeypatch.setattr("lxreview.services.Path.exists", lambda p: True)
+    write_json(paths.root / "state/runtime.json", {"electron": "/fake/electron"})
+    captured = []
+    monkeypatch.setattr("lxreview.services.os.execve", lambda *args: captured.append(args))
+    old_mask = __import__("os").umask(0o077)
+    try:
+        service_exec(paths, Config(), name)
+    finally:
+        __import__("os").umask(old_mask)
+    assert captured[0][2]["XAUTHORITY"] == str(paths.root / "state/vnc/.Xauthority")
+
+
+def test_supervisor_preserves_launch_environment_and_uses_distinct_tmux_servers(paths, monkeypatch):
+    config = Config()
+    config.runtime.supervisor = "tmux-scope"
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/safe/agent.sock")
+    calls = []
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "lxreview.process.run",
+        lambda argv, *a, **k: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    supervisor = Supervisor(paths, config)
+    supervisor.start("browser", ["/owned/browser"])
+    supervisor.start("desktop", ["/owned/desktop"])
+    assert supervisor.tmux_socket("browser") != supervisor.tmux_socket("desktop")
+    assert all("-L" not in argv and "/dev/null" in argv for argv in calls)
+    state = json.loads(
+        (paths.root / f"state/services/{supervisor.unit('browser')}.json").read_text()
+    )
+    assert state["environment"]["SSH_AUTH_SOCK"] == "/safe/agent.sock"
+    assert "supervised-exec" in str(calls)
+
+
+def test_supervisor_uses_recorded_kind_after_config_changes(paths, monkeypatch):
+    import socket
+
+    config = Config()
+    supervisor = Supervisor(paths, config)
+    write_json(
+        paths.root / f"state/services/{supervisor.unit('browser')}.json",
+        {"host": socket.getfqdn(), "supervisor": "launchd"},
+    )
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    calls = []
+
+    def run(argv, *args, **kwargs):
+        stopped = any("bootout" in call for call in calls)
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 3 if stopped else 0, "state = running", "")
+
+    monkeypatch.setattr("lxreview.process.run", run)
+    supervisor.stop("browser")
+    assert all(argv[0] == "/usr/bin/launchctl" for argv in calls)
+
+
+def test_failed_agentify_update_preserves_existing_runtime(paths, monkeypatch):
+    from lxreview.install import runtime
+
+    old = paths.root / "runtime/agentify"
+    old.mkdir()
+    (old / "working").write_text("old")
+
+    def fail(*args):
+        raise LXError(
+            __import__("lxreview.errors", fromlist=["Category"]).Category.UNAVAILABLE, "npm failed"
+        )
+
+    monkeypatch.setattr(runtime, "_install_agentify", fail)
+    with pytest.raises(LXError):
+        runtime.install_agentify(paths)
+    assert (old / "working").read_text() == "old"
+
+
+@pytest.mark.parametrize("entry", [{}, None, ""])
+def test_existing_empty_registration_is_preserved(paths, tmp_path, entry):
+    from lxreview.install.claude import install
+
+    home = tmp_path / "account"
+    home.mkdir()
+    config = home / ".claude.json"
+    original = json.dumps({"mcpServers": {"lxreview-reviewer": entry}})
+    config.write_text(original)
+    with pytest.raises(LXError, match="refusing to overwrite"):
+        install(paths, Config(), home)
+    assert config.read_text() == original
+    assert not (home / ".claude/commands/review-loop.md").exists()
+
+
+def test_partial_command_install_remains_removable(paths, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from lxreview.install import claude
+
+    home = tmp_path / "account"
+    home.mkdir()
+    original = Path.symlink_to
+
+    def fail_second(path, *args, **kwargs):
+        if path.name == "review-status.md":
+            raise OSError("simulated failure")
+        original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "symlink_to", fail_second)
+    with pytest.raises(OSError):
+        claude.install(paths, Config(), home)
+    assert (home / ".claude/commands/review-loop.md").is_symlink()
+    claude.uninstall(paths, Config())
+    assert not (home / ".claude/commands/review-loop.md").is_symlink()
+
+
+def test_stop_unloads_exited_launchd_job(paths, monkeypatch):
+    import socket
+
+    supervisor = Supervisor(paths, Config())
+    write_json(
+        paths.root / f"state/services/{supervisor.unit('browser')}.json",
+        {
+            "host": socket.getfqdn(),
+            "supervisor": "launchd",
+        },
+    )
+    calls = []
+    loaded = True
+
+    def run(argv, *a, **kw):
+        nonlocal loaded
+        calls.append(argv)
+        if "bootout" in argv:
+            loaded = False
+        return subprocess.CompletedProcess(argv, 0 if loaded else 3, "state = not running", "")
+
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("lxreview.process.run", run)
+    supervisor.stop("browser")
+    supervisor.stop("browser")
+    assert not loaded
+    assert any("bootout" in argv for argv in calls)
+
+
+@pytest.mark.parametrize("fallback_ok", [True, False])
+def test_electron_install_script_failure_uses_clean_recovery(paths, monkeypatch, fallback_ok):
+    from lxreview.install import runtime
+
+    prefix = paths.root / "runtime/stage"
+    prefix.mkdir()
+    calls = []
+
+    def run(argv, *args, **kwargs):
+        calls.append(argv)
+        if "ci" in argv:
+            if "--ignore-scripts" in argv and fallback_ok:
+                package = prefix / "node_modules/@agentify/desktop/package.json"
+                package.parent.mkdir(parents=True)
+                package.write_text(json.dumps({"version": runtime.AGENTIFY_VERSION}))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        if any(arg.endswith("electron/install.js") for arg in argv):
+            native = prefix / "node_modules/electron/dist/electron"
+            native.parent.mkdir(parents=True)
+            native.write_text("native")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runtime.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(runtime, "run", run)
+    if fallback_ok:
+        runtime._install_agentify(paths, prefix)
+        assert any(arg.endswith("electron/install.js") for call in calls for arg in call)
+    else:
+        with pytest.raises(LXError, match="recovery failed"):
+            runtime._install_agentify(paths, prefix)
+    assert len([call for call in calls if "ci" in call]) == 3
+    assert "--ignore-scripts" in calls[2]

@@ -1,0 +1,1 @@
+{"name":"lxreview-private-agentify","private":true,"version":"0.1.0","dependencies":{"@agentify/desktop":"0.2.4","electron":"39.8.7"}}

@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+.live-results/
+
+# Local-only agent instructions; never commit
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+AGENTS.md
+LXReview-instructions.md
+.agents/
+.codex/

@@ -1,0 +1,33 @@
+name: quality
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        python: ['3.12', '3.13', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: '0.12.19'
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest
+      - run: uv build
+      - name: Wheel install smoke
+        run: |
+          uv venv /tmp/lxreview-wheel-smoke --python '${{ matrix.python }}'
+          uv pip install --python /tmp/lxreview-wheel-smoke/bin/python dist/*.whl
+          /tmp/lxreview-wheel-smoke/bin/lxreview version
+          /tmp/lxreview-wheel-smoke/bin/lxreview --help
