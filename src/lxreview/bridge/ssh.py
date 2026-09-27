@@ -166,6 +166,8 @@ async def serve(paths: Paths, config: Config) -> None:
         ),
         access_log=None,
         shutdown_timeout=2,
+        # A stopped run's review must not keep the browser busy until ChatGPT answers.
+        handler_cancellation=True,
     )
     await runner.setup()
     sock = socket.socket()

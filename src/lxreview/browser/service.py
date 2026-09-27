@@ -64,6 +64,8 @@ async def serve(paths: Paths, config: Config, metadata: dict, session=None) -> N
         application(session, token, math.inf, state / "operation.lock", metadata),
         access_log=None,
         shutdown_timeout=2,
+        # A stopped run's review must not keep the browser busy until ChatGPT answers.
+        handler_cancellation=True,
     )
     await runner.setup()
     try:

@@ -58,6 +58,45 @@ async def test_client_passes_through_the_session_error(short_paths):
     assert not (short_paths.root / "state/browser/connection.json").exists()
 
 
+class Slow(LoggedOut):
+    def __init__(self):
+        self.started, self.cancelled = asyncio.Event(), False
+
+    async def query(self, prompt, timeout):
+        self.started.set()
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+async def test_stopped_client_frees_the_browser_at_once(short_paths):
+    session = Slow()
+    service = asyncio.create_task(serve(short_paths, Config(), {}, session))
+    try:
+        for _ in range(100):
+            if (short_paths.root / "state/browser/connection.json").exists():
+                break
+            await asyncio.sleep(0.05)
+        # A run stopped mid-review disconnects; its ChatGPT wait must not hold the lock.
+        review = asyncio.create_task(
+            ServiceSession(short_paths).call("query", prompt="x", timeout=600)
+        )
+        await asyncio.wait_for(session.started.wait(), 5)
+        review.cancel()
+        await asyncio.gather(review, return_exceptions=True)
+        for _ in range(100):
+            if session.cancelled:
+                break
+            await asyncio.sleep(0.05)
+        assert session.cancelled
+        assert await ServiceSession(short_paths).sessions() == []
+    finally:
+        service.cancel()
+        await asyncio.gather(service, return_exceptions=True)
+
+
 async def test_overlong_root_is_refused_before_launching_chrome(tmp_path):
     paths = Paths(tmp_path / ("x" * 90))
     paths.ensure()
