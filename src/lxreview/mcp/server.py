@@ -24,7 +24,7 @@ def create_server(paths: Paths, config: Config) -> MCPServer:
             return exc.as_dict()
 
     @server.tool()
-    async def review_browser_query(target: str, head_sha: str, timeout: float = 600) -> dict:
+    async def review_browser_query(target: str, head_sha: str, timeout: float = 1800) -> dict:
         """Perform one fresh independent full review and return the verbatim assistant response."""
         try:
             request = ReviewRequest(target=target, head_sha=head_sha, timeout=timeout)

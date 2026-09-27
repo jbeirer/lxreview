@@ -24,7 +24,7 @@ class ReviewRequest(BaseModel):
     target: str
     head_sha: str
     rubric: str = "correctness, regressions, edge cases, unnecessary complexity, API consistency, test quality, maintainability"
-    timeout: float = Field(default=600, ge=5, le=1800)
+    timeout: float = Field(default=1800, ge=5, le=1800)
     model: str = Field(default="default", pattern=MODEL_NAME)
     reasoning_effort: str = Field(default="default", pattern=EFFORT_NAME)
 
