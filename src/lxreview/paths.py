@@ -1,5 +1,6 @@
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import tempfile
@@ -8,6 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import Category, LXError
+
+# Per-user, node-local runtime directories (tmpfs) created by systemd-logind.
+RUN_USER = Path("/run/user")
 
 
 def private_dir(path: Path) -> Path:
@@ -77,6 +81,20 @@ class Paths:
     @property
     def config(self) -> Path:
         return self.root / "config/config.toml"
+
+    @property
+    def key(self) -> str:
+        """Short hash of the root that keeps units and runtime paths of installations apart."""
+        return hashlib.sha256(str(self.root).encode()).hexdigest()[:8]
+
+    @property
+    def local(self) -> Path:
+        """Node-local private directory for sockets and temporary files.
+
+        AFS homes cannot hold unix sockets, and every host runs its own services anyway.
+        """
+        runtime = RUN_USER / str(os.getuid())
+        return runtime / f"lxreview-{self.key}" if runtime.is_dir() else self.root / "run"
 
     @property
     def executable(self) -> Path:

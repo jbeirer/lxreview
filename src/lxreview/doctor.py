@@ -5,6 +5,7 @@ import platform
 import socket
 import stat
 import subprocess
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from .config import CHROME_VERSION, Config
 from .errors import LXError
 from .install.claude import COMMANDS
 from .paths import Paths, lock
-from .process import Supervisor, binary, environment, run
+from .process import AFS_MINIMUM, Supervisor, afs_token, binary, environment, run
 
 
 async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dict]:
@@ -103,6 +104,16 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
             "Claude user-scope MCP",
             config.role == "workstation",
             "Not required on workstation" if config.role == "workstation" else "Run lxreview setup",
+        )
+    token = afs_token(paths.root, paths)
+    if token:
+        cell, expiry = token
+        add(
+            "AFS token",
+            expiry is not None and expiry - datetime.now() >= AFS_MINIMUM,
+            f"{cell} token valid until {expiry:%b %d %H:%M}; renew with kinit and aklog"
+            if expiry
+            else f"No {cell} token; run kinit and aklog",
         )
     try:
         if config.runtime.supervisor == "launchd":

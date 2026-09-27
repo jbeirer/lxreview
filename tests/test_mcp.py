@@ -69,6 +69,7 @@ async def test_real_mcp_review_through_browser_service():
     import tempfile
     from pathlib import Path
 
+    import lxreview.paths as lxpaths
     from lxreview.browser.service import serve
     from lxreview.paths import Paths
 
@@ -79,7 +80,7 @@ async def test_real_mcp_review_through_browser_service():
     Config().save(paths)
     fake = FakeChatGPT()
     service = asyncio.create_task(serve(paths, Config(), {"backend": "chatgpt-web"}, fake))
-    socket_path = paths.root / "state/browser/api.sock"
+    socket_path = paths.local / "browser.sock"
     try:
         for _ in range(100):
             if (paths.root / "state/browser/connection.json").exists():
@@ -88,7 +89,13 @@ async def test_real_mcp_review_through_browser_service():
         assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "lxreview.cli", "mcp"],
+            # The server must find the socket in the same (test) runtime directory.
+            args=[
+                "-c",
+                f"import lxreview.paths as p, pathlib; p.RUN_USER = pathlib.Path({str(lxpaths.RUN_USER)!r})"
+                "; from lxreview.cli import main; main()",
+                "mcp",
+            ],
             env={**os.environ, "LXREVIEW_HOME": str(paths.root)},
         )
         async with stdio_client(params) as (read, write):
