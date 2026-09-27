@@ -375,6 +375,30 @@ def test_runs_need_an_afs_token_that_outlasts_the_loop(paths, monkeypatch, listi
         require_afs_token(paths, home)
 
 
+@pytest.mark.parametrize("failure", ["missing", "exit"])
+def test_runs_refuse_an_afs_location_whose_token_cannot_be_inspected(paths, monkeypatch, failure):
+    from lxreview.errors import Category
+    from lxreview.process import afs_token, require_afs_token
+
+    def binary(name):
+        if failure == "missing":
+            raise LXError(Category.UNAVAILABLE, f"Missing {name}")
+        return "/usr/bin/" + name
+
+    listing = "User's (AFS ID 1) rxkad tokens for cern.ch [Expires Dec 31 23:59]\n"
+    monkeypatch.setattr("lxreview.process.binary", binary)
+    monkeypatch.setattr(
+        "lxreview.process.subprocess.run",
+        lambda argv, **k: subprocess.CompletedProcess(argv, 1, listing, ""),
+    )
+    home = Path("/afs/cern.ch/user/j/jdoe/.lxreview")
+    assert afs_token(paths.root, paths) is None
+    require_afs_token(paths, paths.root)
+    assert afs_token(home, paths) == ("cern.ch", None)
+    with pytest.raises(LXError, match="kinit and aklog"):
+        require_afs_token(paths, paths.root, home)
+
+
 def test_runs_refuse_an_afs_token_that_expires_mid_loop(paths, monkeypatch):
     from datetime import datetime, timedelta
 

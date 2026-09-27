@@ -102,16 +102,17 @@ AFS_MINIMUM = timedelta(hours=2)
 def afs_token(location: Path, paths: Paths) -> tuple[str, datetime | None] | None:
     """The AFS cell holding location and its token's expiry (None: no valid token).
 
-    Returns None when location is not on AFS or the host has no tokens command.
+    Returns None only when location is not on AFS. A token that cannot be inspected
+    counts as missing, so an unchecked AFS location never passes.
     """
     parts = location.resolve().parts
     if len(parts) < 3 or parts[1] != "afs":
         return None
     cell = parts[2].lstrip(".")
     try:
-        listing = run([binary("tokens")], paths, check=False).stdout
+        listing = run([binary("tokens")], paths).stdout
     except LXError:
-        return None
+        return cell, None
     match = re.search(rf"tokens for {re.escape(cell)} \[Expires (\w+ +\d+ \d+:\d+)\]", listing)
     if not match:
         return cell, None
