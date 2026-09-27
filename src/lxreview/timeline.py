@@ -136,6 +136,12 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
         ]
     elif kind == "evaluation_complete":
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
+    elif kind == "discussion_read":
+        texts = [
+            f"PR discussion read: {event.get('comments', 0)} comments,"
+            f" {event.get('reviews', 0)} reviews, {event.get('threads', 0)} review threads"
+            f" ({event.get('unresolved', 0)} unresolved)"
+        ]
     elif kind == "tests_reported":
         preexisting = event.get("preexisting", [])
         texts = [

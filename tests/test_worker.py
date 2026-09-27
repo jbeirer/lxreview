@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import DISCUSSION
 
 from lxreview.config import Config
 from lxreview.contracts import parse_response
@@ -84,6 +85,9 @@ async def test_full_two_pass_loop_with_prior_raw_saved(paths, tmp_path, monkeypa
         audit = Path(store.load()["audit"]) / "pass-01"
         assert (audit / "reviewer.md").read_text().startswith("SUBSTANTIAL")
         if read_only:
+            # The evaluation weighs the PR's own discussion, also kept with the pass.
+            assert "PR discussion" in prompt and prompt.endswith(DISCUSSION)
+            assert (audit / "discussion.md").read_text() == DISCUSSION
             return Evaluation(
                 findings=[
                     Decision(

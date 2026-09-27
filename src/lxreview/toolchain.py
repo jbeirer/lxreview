@@ -22,6 +22,7 @@ SYSTEM_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 REPOSITORY_BIN = (".venv/bin", "venv/bin", "env/bin", "node_modules/.bin", ".pixi/envs/default/bin")
 # Per-user toolchain installers.
 HOME_BIN = (
+    "bin",
     ".local/bin",
     ".cargo/bin",
     "go/bin",

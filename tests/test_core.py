@@ -41,6 +41,7 @@ def test_single_line_full_review():
     assert "\r" not in prompt and "\n" not in prompt
     assert request.target in prompt and request.head_sha in prompt
     assert "complete current diff" in prompt and "ACCESS_FAILED" in prompt
+    assert "conversation" in prompt and "already settled" in prompt
 
 
 @pytest.mark.parametrize(
@@ -460,6 +461,22 @@ def test_timeline_names_the_reviewer_model_and_reasoning():
         "reasoning": "high",
     }
     assert describe(event)[0].endswith("Reviewer pass 1 complete (GPT-5.5, high), CLEAN")
+
+
+def test_timeline_summarizes_the_pr_discussion():
+    from lxreview.timeline import describe
+
+    event = {
+        "kind": "discussion_read",
+        "time": "",
+        "comments": 3,
+        "reviews": 1,
+        "threads": 2,
+        "unresolved": 1,
+    }
+    assert describe(event)[0].endswith(
+        "PR discussion read: 3 comments, 1 reviews, 2 review threads (1 unresolved)"
+    )
 
 
 def test_timeline_separates_preexisting_check_failures():

@@ -4,6 +4,7 @@ import os
 import platform
 import socket
 import stat
+import subprocess
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -61,6 +62,26 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
             )
         except (LXError, OSError, ValueError, TimeoutError, AttributeError):
             add("Claude Code", False, "Could not read Claude login status; run claude auth status")
+    if config.role == "host":
+        from .discussion import github_cli
+
+        gh, env = github_cli(paths, config)
+        try:
+            ok = (
+                bool(gh)
+                and run([str(gh), "auth", "status"], paths, env=env, check=False).returncode == 0
+            )
+        except (OSError, TimeoutError, subprocess.TimeoutExpired):
+            ok = False
+        add(
+            "GitHub CLI",
+            ok,
+            "Reads each PR's discussion"
+            if ok
+            else "Run gh auth login"
+            if gh
+            else "Install the GitHub CLI (gh) to read PR discussions",
+        )
     integration = paths.root / "state/claude-integration.json"
     try:
         owned = json.loads(integration.read_text())

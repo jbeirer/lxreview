@@ -8,6 +8,7 @@ def prompt_for(request: ReviewRequest) -> str:
     parts = [
         f"Perform a fresh independent full review of {request.target} at current head commit {request.head_sha}.",
         "Open and inspect the pull request yourself, including the complete current diff and surrounding repository code. Do not rely on Claude's description or on any previous review pass. Verify the head commit matches.",
+        "Read the PR's conversation too, including review threads and whether they are resolved. Do not report a point the discussion already settled with a reason that still holds for the current code; if you think a settled reason is wrong, report it and name the comment you disagree with.",
         f"Look for substantial issues in: {request.rubric}.",
         "For each finding classify it SUBSTANTIAL or NON_BLOCKING, identify file and line or symbol, explain the concrete problem and suggest a concrete fix. Start each finding on its own line as SUBSTANTIAL [S1], SUBSTANTIAL [S2], or NON_BLOCKING [N1], using unique IDs. Subjective style preferences are not SUBSTANTIAL.",
         "If you cannot access or adequately inspect the complete PR at this head, say so and end exactly with VERDICT: ACCESS_FAILED.",

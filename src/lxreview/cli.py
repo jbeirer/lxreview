@@ -17,7 +17,7 @@ from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__
+from . import __version__, discussion
 from .config import Config, executable
 from .errors import Category, LXError
 from .paths import Paths, atomic_write, lock, write_json
@@ -356,6 +356,8 @@ def start_run(
             raise LXError(Category.CONFIG, "Start review workers on the repository host")
         executable(config.runtime.claude)
         identity = repository.preflight(target, settle=30)
+        # Every pass reads the PR discussion; refuse now rather than after the first review.
+        discussion.fetch(target, paths, config)
         with lock(repository.audit_root() / "start.lock"):
             for path in (paths.root / "state/runs").glob("*/state.json"):
                 old = json.loads(path.read_text())
@@ -419,6 +421,7 @@ def resume(run_id: str):
         repo = Repository(Path(state["repo"]), paths)
         repo.verify_identity(state["identity"])
         repo.preflight(state["target"])
+        discussion.fetch(state["target"], paths, config)
         incomplete = Path(state["audit"]) / f"pass-{state['completed_pass'] + 1:02}"
         if incomplete.exists():
             # Preserve the interrupted pass; new independent pass starts from verified pushed head.
