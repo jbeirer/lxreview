@@ -25,8 +25,9 @@ class LoggedOut:
 
 @pytest.fixture
 def short_paths():
-    # A short root keeps the unix socket path within the macOS sockaddr limit.
-    root = Path(tempfile.mkdtemp(prefix="lx", dir="/tmp"))
+    # A short root keeps the unix socket path within the macOS sockaddr limit; TMPDIR is
+    # short on macOS and inside the worker's sandbox, where /tmp itself is read-only.
+    root = Path(tempfile.mkdtemp(prefix="lx"))
     paths = Paths(root / "root")
     paths.ensure()
     yield paths

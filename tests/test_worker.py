@@ -1,4 +1,5 @@
 import contextlib
+import json
 from pathlib import Path
 
 import pytest
@@ -92,7 +93,14 @@ async def test_full_two_pass_loop_with_prior_raw_saved(paths, tmp_path, monkeypa
             )
         assert (audit / "evaluation.json").exists()
         if schema is EditResult:
-            return EditResult(tests=["pytest: 1 passed"], tests_passed=True, summary="fixed")
+            # Checks run on the unmodified code first; failures already there do not block.
+            assert "on the unmodified code" in prompt
+            return EditResult(
+                tests=["pytest: 1 failed, 40 passed"],
+                tests_passed=True,
+                preexisting_failures=["test_io: fails identically without the change"],
+                summary="fixed",
+            )
         # LXReview pushes; the worker only commits.
         assert "Do not push" in prompt
         Repo.head_value = "b" * 40
@@ -104,6 +112,9 @@ async def test_full_two_pass_loop_with_prior_raw_saved(paths, tmp_path, monkeypa
     assert [r.head_sha for r in reviewer.requests] == ["a" * 40, "b" * 40]
     assert (Path(store.load()["audit"]) / "pass-01/diff.patch").exists()
     assert "CLEAN" in store.report()
+    events = (store.directory / "events.jsonl").read_text().splitlines()
+    reported = [e for e in map(json.loads, events) if e["kind"] == "tests_reported"]
+    assert reported[0]["preexisting"] == ["test_io: fails identically without the change"]
 
 
 @pytest.mark.parametrize("raw", ["VERDICT: ACCESS_FAILED", "truncated response"])
@@ -164,7 +175,9 @@ async def test_failed_push_cannot_become_clean(paths, tmp_path, monkeypatch):
                 findings=[Decision(finding="S1", decision="ACCEPTED", reason="bug", evidence="f:1")]
             )
         if args[4] is EditResult:
-            return EditResult(tests=["pytest passes"], tests_passed=True, summary="fixed")
+            return EditResult(
+                tests=["pytest passes"], tests_passed=True, preexisting_failures=[], summary="fixed"
+            )
         # The worker reports a commit that is not HEAD: publication must refuse it.
         return PublishResult(commit="b" * 40)
 
@@ -289,7 +302,12 @@ async def test_failed_tests_prevent_publication(paths, tmp_path, monkeypatch):
                 findings=[Decision(finding="S1", decision="ACCEPTED", reason="bug", evidence="f:1")]
             )
         assert args[4] is EditResult, "Publication must not start after failed tests"
-        return EditResult(tests=["pytest: failed"], tests_passed=False, summary="not fixed")
+        return EditResult(
+            tests=["pytest: failed"],
+            tests_passed=False,
+            preexisting_failures=[],
+            summary="not fixed",
+        )
 
     await execute(
         paths,
@@ -392,7 +410,12 @@ def fixing_turn(decide, prompts):
                 ]
             )
         if schema is EditResult:
-            return EditResult(tests=["checks: passed"], tests_passed=True, summary="fixed")
+            return EditResult(
+                tests=["checks: passed"],
+                tests_passed=True,
+                preexisting_failures=[],
+                summary="fixed",
+            )
         Repo.head_value = ("b" if Repo.head_value == "a" * 40 else "c") * 40
         return PublishResult(commit=Repo.head_value)
 

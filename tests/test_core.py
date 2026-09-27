@@ -325,7 +325,9 @@ def test_private_root_refuses_nested_symlink(paths, tmp_path):
     from lxreview.paths import Paths
 
     outside = tmp_path / "outside"
-    outside.mkdir(mode=0o755)
+    outside.mkdir()
+    # Set the mode explicitly: the worker runs checks with umask 077.
+    outside.chmod(0o755)
     link = tmp_path / "link"
     link.symlink_to(outside)
     with pytest.raises(LXError, match="symlink"):
@@ -458,3 +460,18 @@ def test_timeline_names_the_reviewer_model_and_reasoning():
         "reasoning": "high",
     }
     assert describe(event)[0].endswith("Reviewer pass 1 complete (GPT-5.5, high), CLEAN")
+
+
+def test_timeline_separates_preexisting_check_failures():
+    from lxreview.timeline import describe
+
+    event = {
+        "kind": "tests_reported",
+        "time": "",
+        "passed": True,
+        "tests": ["pytest: 1 failed, 40 passed"],
+        "preexisting": ["test_io: fails identically before the edit"],
+    }
+    texts = [line.split("  ", 1)[-1].strip() for line in describe(event)]
+    assert texts[0].endswith("Checks PASS (1 pre-existing failures)")
+    assert "pre-existing: test_io: fails identically before the edit" in texts

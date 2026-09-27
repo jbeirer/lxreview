@@ -137,8 +137,13 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
     elif kind == "evaluation_complete":
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
     elif kind == "tests_reported":
-        texts = [f"Checks {'PASS' if event.get('passed') else 'FAIL'}"]
+        preexisting = event.get("preexisting", [])
+        texts = [
+            f"Checks {'PASS' if event.get('passed') else 'FAIL'}"
+            + (f" ({len(preexisting)} pre-existing failures)" if preexisting else "")
+        ]
         texts += [f"  {shorten(test, limit)}" for test in event.get("tests", [])]
+        texts += [f"  pre-existing: {shorten(test, limit)}" for test in preexisting]
     elif kind == "push_started":
         texts = [f"Pushing commit {str(event.get('commit', ''))[:10]}"]
     elif kind == "fixes_pushed":

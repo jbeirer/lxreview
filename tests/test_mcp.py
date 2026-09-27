@@ -72,8 +72,9 @@ async def test_real_mcp_review_through_browser_service():
     from lxreview.browser.service import serve
     from lxreview.paths import Paths
 
-    # A short root keeps the unix socket path within the macOS sockaddr limit.
-    paths = Paths(Path(tempfile.mkdtemp(prefix="lx", dir="/tmp")) / "root")
+    # A short root keeps the unix socket path within the macOS sockaddr limit; TMPDIR is
+    # short on macOS and inside the worker's sandbox, where /tmp itself is read-only.
+    paths = Paths(Path(tempfile.mkdtemp(prefix="lx")) / "root")
     paths.ensure()
     Config().save(paths)
     fake = FakeChatGPT()

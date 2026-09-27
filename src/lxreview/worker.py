@@ -39,7 +39,10 @@ class Evaluation(BaseModel):
 class EditResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tests: list[str] = Field(min_length=1)
+    # True when no check fails beyond the failures it already had on the reviewed code.
     tests_passed: bool
+    # Failures that occur identically on the reviewed code; they do not block publication.
+    preexisting_failures: list[str]
     summary: str
 
 
@@ -52,6 +55,10 @@ class FixResult(EditResult, PublishResult):
     """Combined audit record; Claude edits/tests and commits in separate restricted turns."""
 
     pushed: bool
+
+
+# Parent of each turn's private directory: short, and outside the installation root.
+SCRATCH = "/tmp"
 
 
 def secret_read_paths(paths: Paths) -> list[str]:
@@ -91,7 +98,7 @@ async def claude_turn(
     # output. The sandbox reaches its proxy through a socket under TMPDIR, which must be
     # outside the installation root (read-only to sandboxed commands) and short enough for a
     # socket path. mkdtemp creates the directory 0700.
-    scratch = tempfile.mkdtemp(prefix="lxreview-", dir="/tmp")
+    scratch = tempfile.mkdtemp(prefix="lxreview-", dir=SCRATCH)
     work = Path(scratch) / "work"
     work.mkdir(mode=0o700)
     git_common = Path(state["audit"]).parent.parent
@@ -513,7 +520,7 @@ async def execute(
                         paths,
                         config,
                         store,
-                        "Fix only these accepted findings with minimal relevant changes. Then verify the change the way this project verifies changes: find out from its CI configuration, build files and contributor documentation which checks it runs (tests, type checking, linting, formatting, builds) and run the ones that apply, using the project's own local environment and tools (for example its .venv or node_modules/.bin; common toolchains and any configured environment are already on PATH). Fix what they report in the code you changed, and inspect the diff. If a check cannot run here because its tool is missing or it needs the network or anything else the sandbox withholds, do not work around the sandbox: list it under tests as NOT RUN with the reason. Checks that could not run do not fail the pass, but never report a check as passed that you did not run. Do not stage, commit or push in this turn. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled, so run checks offline. Use one literal shell command per call. Return every check command with its result under tests, tests_passed true only if every check you ran passed, and a concise summary."
+                        "Fix these accepted findings and verify the change the way this project verifies changes. First find out from its CI configuration, build files and contributor documentation which checks it runs (tests, type checking, linting, formatting, builds), and run the ones that apply on the unmodified code, using the project's own local environment and tools (for example its .venv or node_modules/.bin; common toolchains and any configured environment are already on PATH). This baseline records which checks already fail before your edits. Then fix only the accepted findings with minimal relevant changes, run the same checks again, fix every failure your change causes, and inspect the diff. A failure that occurs identically in the baseline is pre-existing: do not fix it or alter unrelated files for it, and list each one under preexisting_failures with its baseline result. If a check cannot run here because its tool is missing or it needs the network or anything else the sandbox withholds, do not work around the sandbox: list it under tests as NOT RUN with the reason. Checks that could not run do not fail the pass, but never report a check as passed that you did not run. Do not stage, commit or push in this turn. Do not alter unrelated files or access credentials. Network and Git metadata writes are disabled, so run checks offline. Use one literal shell command per call. Return every check command with its result after your change under tests, tests_passed true only if no check you ran fails beyond its pre-existing failures, preexisting_failures (empty when the baseline was clean), and a concise summary."
                         + command_guidance(config)
                         + "\n\n"
                         + json.dumps([d.model_dump() for d in accepted]),
@@ -542,6 +549,7 @@ async def execute(
                     pass_number=number,
                     passed=fixes.tests_passed,
                     tests=fixes.tests,
+                    preexisting=fixes.preexisting_failures,
                 )
                 if not fixes.tests_passed:
                     raise LXError(Category.PROTOCOL, "Checks did not pass; publication refused")
@@ -556,7 +564,7 @@ async def execute(
                     paths,
                     config,
                     store,
-                    "The checks passed in the previous turn. Inspect the diff, stage only the explicitly changed files with git add, and commit them with git commit -m <subject> (optionally more -m <paragraph> options, and -s when the project requires a sign-off). Add --no-gpg-sign: LXReview signs the commit afterwards when the user's Git configuration asks for it. The message describes the change only, following the project's commit conventions, with no Co-Authored-By or other trailers and no mention of Claude or AI. Do not push: LXReview pushes the commit after this turn. If a commit hook fails, report it and stop; never bypass hooks. This turn permits Git staging and committing only: no edits, tests or other commands. Return the full commit SHA.",
+                    "The checks showed no new failures in the previous turn. Inspect the diff, stage only the explicitly changed files with git add, and commit them with git commit -m <subject> (optionally more -m <paragraph> options, and -s when the project requires a sign-off). Add --no-gpg-sign: LXReview signs the commit afterwards when the user's Git configuration asks for it. The message describes the change only, following the project's commit conventions, with no Co-Authored-By or other trailers and no mention of Claude or AI. Do not push: LXReview pushes the commit after this turn. If a commit hook fails, report it and stop; never bypass hooks. This turn permits Git staging and committing only: no edits, tests or other commands. Return the full commit SHA.",
                     PublishResult,
                     read_only=False,
                 )

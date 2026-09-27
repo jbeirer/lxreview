@@ -2,14 +2,23 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
+from lxreview import worker
 from lxreview.config import Config
 from lxreview.paths import private_dir
 from lxreview.runs import RunStore
 from lxreview.worker import Evaluation, claude_turn
+
+
+@pytest.fixture(autouse=True)
+def scratch(monkeypatch):
+    # Turns use /tmp in production; a sandboxed test run may write only inside its TMPDIR.
+    assert worker.SCRATCH == "/tmp"
+    monkeypatch.setattr(worker, "SCRATCH", tempfile.gettempdir())
 
 
 @pytest.fixture
@@ -26,6 +35,7 @@ async def test_real_child_stream_capture_and_guard_configuration(paths, store, t
     executable = tmp_path / "fake-claude"
     executable.write_text(
         f"#!{sys.executable}\n"
+        + f"SCRATCH = {os.path.join(tempfile.gettempdir(), 'lxreview-')!r}\n"
         + """import sys,json,uuid
 assert '--dangerously-skip-permissions' in sys.argv
 assert '--strict-mcp-config' in sys.argv
@@ -40,7 +50,7 @@ assert not any(rule.startswith('Read(') for rule in settings['permissions']['den
 assert settings['attribution'] is False
 import os
 # The sandbox proxy socket lives in TMPDIR; it must be short and outside the read-only root.
-assert os.environ['TMPDIR'].startswith('/tmp/lxreview-') and os.path.isdir(os.environ['TMPDIR'])
+assert os.environ['TMPDIR'].startswith(SCRATCH) and os.path.isdir(os.environ['TMPDIR'])
 open(os.path.join(os.environ['LXREVIEW_HOME'], 'turn-tmpdir'), 'w').write(os.environ['TMPDIR'])
 sys.stdin.read()
 print(json.dumps({'type':'system','session_id':str(uuid.uuid4())}),flush=True)
@@ -147,7 +157,7 @@ prompt = sys.stdin.read()
 assert os.environ['TMPDIR'] + '/work' in prompt and os.path.isdir(os.environ['TMPDIR'] + '/work')
 if phase=='edit':
     assert any(path.endswith('.git') for path in settings['sandbox']['filesystem']['denyWrite'])
-    result={'tests':['pytest: passed'],'tests_passed':True,'summary':'fixed'}
+    result={'tests':['pytest: passed'],'tests_passed':True,'preexisting_failures':[],'summary':'fixed'}
 else:
     assert 'Edit' not in sys.argv[sys.argv.index('--tools')+1].split(',')
     result={'commit':'a'*40}
