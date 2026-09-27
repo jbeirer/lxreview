@@ -84,11 +84,13 @@ def application_update(paths: Paths, source: Path) -> None:
         {"version": version, "current": launcher, "previous": old, "release": str(release)},
     )
     atomic_write(paths.executable, launcher, 0o700)
-    prune(paths)
 
 
 def prune(paths: Paths) -> None:
-    """Delete application environments that neither the current nor the previous launcher uses."""
+    """Delete application environments that neither the current nor the previous launcher uses.
+
+    Call only after long-running services have restarted: one may still run a pruned release.
+    """
     state = json.loads((paths.root / "state/application-versions.json").read_text())
     used = [Path(state[key].splitlines()[0].removeprefix("#!")) for key in ("current", "previous")]
     releases = paths.root / "runtime/releases"

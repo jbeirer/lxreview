@@ -930,7 +930,7 @@ def cleanup(yes: bool = False):
 def update(source: Path | None = None, rollback: bool = False):
     """Verify/reinstall the release's locked runtimes; never follow upstream latest."""
     from .install.runtime import install_runtimes
-    from .install.updater import application_rollback, application_update
+    from .install.updater import application_rollback, application_update, prune
 
     paths, config = context()
     with lock(paths.root / "state/setup.lock"), lock(paths.root / "state/reviewer.lock"):
@@ -954,6 +954,8 @@ def update(source: Path | None = None, rollback: bool = False):
             return
         application_update(paths, source)
         restarted = _restart_long_running(paths, config)
+        # Services may have run a release outside current/previous (after a rollback).
+        prune(paths)
     # The new release owns the Claude command texts; its launcher rewrites them once the
     # setup lock is free.
     if config.role == "host":

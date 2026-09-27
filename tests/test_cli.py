@@ -436,3 +436,19 @@ def test_uninstall_keeps_a_command_link_it_does_not_own(paths, tmp_path, monkeyp
     result = runner.invoke(app, ["uninstall", "--yes"])
     assert result.exit_code == 0, result.output
     assert paths.link.is_symlink()
+
+
+def test_update_prunes_releases_only_after_restarting_services(paths, tmp_path, monkeypatch):
+    import lxreview.cli as cli
+    import lxreview.install.updater as updater
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    paths.config.write_text('schema_version = 1\nrole = "workstation"\n')
+    steps = []
+    monkeypatch.setattr(updater, "application_update", lambda *a: steps.append("switch"))
+    # After a rollback a service may still run a release outside current/previous.
+    monkeypatch.setattr(cli, "_restart_long_running", lambda *a: steps.append("restart") or [])
+    monkeypatch.setattr(updater, "prune", lambda *a: steps.append("prune"))
+    result = runner.invoke(app, ["update", "--source", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert steps == ["switch", "restart", "prune"]
