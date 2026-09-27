@@ -65,3 +65,30 @@ def test_leftovers_name_running_services_before_removal(bootstrap, tmp_path, mon
     assert calls[0][-1] == browser.removesuffix("browser") + "*"
     assert f"systemctl --user stop {browser}.service {desktop}.service" in message
     assert message.index("systemctl") < message.index("rm -rf")
+
+
+def test_launcher_is_linked_as_a_bare_command(bootstrap, tmp_path, monkeypatch):
+    launcher, link = tmp_path / "root/bin/lxreview", tmp_path / "home/.local/bin/lxreview"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+    monkeypatch.setenv("PATH", str(link.parent))
+    assert bootstrap.link_command(launcher, link).endswith("Run: lxreview setup")
+    assert link.resolve() == launcher
+    # Rerunning is harmless; outside PATH the user is told what to add.
+    monkeypatch.setenv("PATH", "/usr/bin")
+    assert f"Add {link.parent} to PATH" in bootstrap.link_command(launcher, link)
+
+
+def test_link_never_replaces_another_command(bootstrap, tmp_path):
+    launcher, link = tmp_path / "root/bin/lxreview", tmp_path / "bin/lxreview"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+    link.parent.mkdir()
+    link.write_text("other")
+    assert f"run {launcher} setup" in bootstrap.link_command(launcher, link)
+    assert link.read_text() == "other"
+    # A dangling link from a deleted installation is reclaimed.
+    link.unlink()
+    link.symlink_to(tmp_path / "gone/bin/lxreview")
+    bootstrap.link_command(launcher, link)
+    assert link.resolve() == launcher

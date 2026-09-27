@@ -4,9 +4,9 @@
 
 ```bash
 python3 scripts/bootstrap.py
-~/.lxreview/bin/lxreview setup --mode lxplus-browser
-~/.lxreview/bin/lxreview login
-~/.lxreview/bin/lxreview doctor
+lxreview setup --mode lxplus-browser
+lxreview login
+lxreview doctor
 ```
 
 In a new Claude Code conversation:
@@ -17,7 +17,7 @@ In a new Claude Code conversation:
 
 Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). By default the ChatGPT reviewer uses its highest reasoning level on ChatGPT's current model, and Claude uses Claude Code's own model and effort. Override either inline with `--chatgpt MODEL[:EFFORT]` and `--claude MODEL[:EFFORT]`, for example `/review-loop --chatgpt sol:high --claude opus:xhigh`, `/review-loop --chatgpt :medium` or `/review-loop --claude opus`; a ChatGPT model can be named by a unique part of its name. The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
 
-The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. It never modifies shell startup files or PATH. Use the absolute executable path (shown above); `lxreview` below abbreviates that path. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
+The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. The only file it writes outside that directory is the command symlink `~/.local/bin/lxreview`, which `lxreview uninstall` removes again. It never modifies shell startup files or PATH; if `~/.local/bin` is not on your PATH, add it or call `~/.lxreview/bin/lxreview` directly. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated.
 
 ## Two browser placements
 

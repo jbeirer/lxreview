@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Install from this reviewed checkout without changing shell configuration."""
+"""Install from this reviewed checkout without changing shell configuration.
+
+The only file written outside the root is the ~/.local/bin/lxreview symlink, and only if
+that name is free; uninstall removes it again.
+"""
 
 import argparse
 import hashlib
@@ -76,6 +80,20 @@ def occupied(root, source):
         "  rm -rf " + shlex.quote(str(root)),
     ]
     return "\n".join(lines)
+
+
+def link_command(launcher, link):
+    """Link the launcher as a bare command unless the name is taken; return what to run next."""
+    if link.is_symlink() and not link.exists():
+        link.unlink()  # left behind by an installation deleted without uninstall
+    if not os.path.lexists(link):
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(launcher)
+    if link.resolve() != launcher.resolve():
+        return f"Installed {launcher}\n{link} belongs to another installation; run {launcher} setup"
+    if str(link.parent) not in os.environ.get("PATH", "").split(os.pathsep):
+        return f"Installed {link}\nAdd {link.parent} to PATH, then run: lxreview setup"
+    return f"Installed {link}\nRun: lxreview setup"
 
 
 def main():
@@ -157,9 +175,7 @@ def main():
         f"#!{python}\nimport os\nos.environ['LXREVIEW_HOME'] = {str(root)!r}\nfrom lxreview.cli import main\nmain()\n"
     )
     launcher.chmod(0o700)
-    print(
-        f"Installed {launcher}\nRun: {launcher} setup\nPATH was not changed; use the absolute path."
-    )
+    print(link_command(launcher, Path.home() / ".local/bin/lxreview"))
 
 
 if __name__ == "__main__":

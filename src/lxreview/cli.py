@@ -633,7 +633,10 @@ def report(run_id: str, output_file: Path | None = typer.Option(None, "--output"
 
 
 def _launcher(paths: Paths) -> str:
-    """The launcher as users can paste it; PATH is never modified, so bare lxreview fails."""
+    """The launcher as users can paste it: bare lxreview when PATH finds this installation."""
+    found = shutil.which("lxreview")
+    if found and Path(found).resolve() == paths.executable.resolve():
+        return "lxreview"
     home, path = str(Path.home()), str(paths.executable)
     return "~" + path[len(home) :] if path.startswith(home + "/") else path
 
@@ -1008,6 +1011,8 @@ def uninstall(yes: bool = False):
             )
         _stop(paths, config)
         remove_integration(paths, config)
+        if paths.link.is_symlink() and Path(os.readlink(paths.link)) == paths.executable:
+            paths.link.unlink()
         destination = paths.root.with_name(paths.root.name + ".uninstalled-" + secrets.token_hex(4))
         paths.root.rename(destination)
         output(

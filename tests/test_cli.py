@@ -302,7 +302,7 @@ def test_login_shows_copyable_steps_once(paths, monkeypatch):
     # Commands stay on one physical line even when the launcher path is long.
     assert any(line.strip() == f"{paths.executable} desktop password" for line in text.splitlines())
     assert "ChatGPT login verified · valid until" in text and "(90 days)" in text
-    # PATH is never modified, so every pasteable command names the launcher itself.
+    # PATH does not find this installation, so pasteable commands name the launcher.
     assert f"Next: {paths.executable} doctor" in text
 
 
@@ -398,3 +398,40 @@ def test_the_stream_lists_findings_and_colors_a_clean_outcome_green():
     assert texts[1:] == ["  S1 Off by one", "  N1 Typo"]
     assert style("  S1 Off by one") == "yellow" and style("  N1 Typo") == "dim"
     assert style("Finished: NO_VALID_SUBSTANTIAL_FINDINGS") == "bold green"
+
+
+def test_uninstall_removes_only_its_own_command_link(paths, tmp_path, monkeypatch):
+    import lxreview.cli as cli
+    import lxreview.install.claude as claude
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "_stop", lambda *args: None)
+    monkeypatch.setattr(claude, "uninstall", lambda *args: None)
+    paths.config.write_text("schema_version = 1\n")
+    paths.executable.write_text("")
+    paths.executable.chmod(0o700)
+    paths.link.parent.mkdir(parents=True)
+    paths.link.symlink_to(paths.executable)
+    monkeypatch.setenv("PATH", str(paths.link.parent))
+    # A launcher found on PATH is shown as the bare command.
+    assert cli._launcher(paths) == "lxreview"
+    result = runner.invoke(app, ["uninstall", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert not paths.link.is_symlink()
+
+
+def test_uninstall_keeps_a_command_link_it_does_not_own(paths, tmp_path, monkeypatch):
+    import lxreview.cli as cli
+    import lxreview.install.claude as claude
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "_stop", lambda *args: None)
+    monkeypatch.setattr(claude, "uninstall", lambda *args: None)
+    paths.config.write_text("schema_version = 1\n")
+    paths.link.parent.mkdir(parents=True)
+    paths.link.symlink_to(tmp_path / "other/bin/lxreview")
+    result = runner.invoke(app, ["uninstall", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert paths.link.is_symlink()

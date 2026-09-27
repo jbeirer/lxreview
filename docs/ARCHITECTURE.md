@@ -25,4 +25,4 @@ stateDiagram-v2
 
 Resume requires matching branch/remote and clean, pushed HEAD. Incomplete pass evidence is archived before a new independent pass; a dirty partial edit is never silently committed. The durable cancel marker wins over later worker state updates. Host identity protects shared-home LXPLUS users from treating another node's service as local. Supervisor names include an installation-root hash to avoid cross-installation collisions.
 
-The absolute package launcher lives under `~/.lxreview/bin`. Claude user integration points back to that root; shell startup files and PATH are untouched.
+The absolute package launcher lives under `~/.lxreview/bin`, and bootstrap links it as `~/.local/bin/lxreview` when that name is free (uninstall removes only a link to its own launcher). Claude user integration points back to the absolute launcher; shell startup files and PATH are untouched.
