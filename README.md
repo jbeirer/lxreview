@@ -1,132 +1,148 @@
 # LXReview
 
-**Independent AI review loops for LXPLUS development.**
+**Independent AI review loops for Claude Code development on LXPLUS.**
+
+ChatGPT reviews the actual GitHub PR, Claude evaluates and fixes useful findings, and LXReview sends the updated PR through another independent review. The run continues in the background until no accepted substantial issues remain or the pass limit is reached.
+
+## Why LXReview?
+
+- **Independent review** — ChatGPT reads the PR on GitHub rather than relying on Claude's description of its work.
+- **Automatic fix/review loop** — accepted findings can be fixed, checked, committed, pushed and reviewed again.
+- **Persistent runs** — reviews keep running after you close the Claude chat.
+- **Visible decisions** — follow findings, accept/reject reasons, edits, checks, commits and subsequent passes.
+- **Uses existing subscriptions** — sign into ChatGPT normally; no OpenAI API key or API credits are required.
+
+## How it works
+
+```mermaid
+flowchart LR
+    PR[PR on GitHub] --> Review[ChatGPT reviews]
+    Review --> Evaluate[Claude evaluates findings]
+    Evaluate --> Fix[Accepted fixes + checks + push]
+    Fix --> Review
+```
+
+The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes. The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
+
+## Quick start
+
+### Prerequisites
+
+- An LXPLUS account and a Git checkout of the project you want reviewed.
+- Claude Code installed and authenticated, plus GitHub CLI (`gh`) authenticated with `gh auth login`.
+- Git, `python3` and `uv` available on the installation host.
+- A ChatGPT account that can access the PR, and a workstation with SSH and a VNC viewer for the initial browser login.
+
+The host also needs the desktop and sandbox tools checked by `doctor`; see [host requirements](docs/OPERATIONS.md#lxplus-host-considerations).
+
+### Install and log in
+
+On the LXPLUS host where you will work:
 
 ```bash
+git clone https://github.com/jbeirer/lxreview.git
+cd lxreview
 python3 scripts/bootstrap.py
+export PATH="$HOME/.local/bin:$PATH"
 lxreview setup --mode lxplus-browser
 lxreview login
 lxreview doctor
 ```
 
-In a new Claude Code conversation:
+`login` walks you through connecting to the remote desktop and signing into ChatGPT. Installation is private to your account; the PATH command above applies to the current shell.
+
+To view the browser again later, run `lxreview desktop connect` on the same LXPLUS host. It prints the SSH tunnel and VNC viewer instructions to follow on your workstation; see [reconnecting to the desktop](docs/OPERATIONS.md#reconnect-to-the-desktop).
+
+### Start your first review
+
+Open a **new Claude Code conversation in the project you want reviewed**, with its PR branch checked out and the working tree clean. Replace the example URL with your PR:
 
 ```text
 /review-loop https://github.com/owner/repository/pull/123
 ```
 
-Without a URL, `/review-loop` reviews the open PR of the current branch (found with the GitHub CLI). By default the ChatGPT reviewer uses medium reasoning on ChatGPT's current model, and Claude uses Claude Code's own model and effort. Override either inline with `--chatgpt MODEL[:EFFORT]` and `--claude MODEL[:EFFORT]`, for example `/review-loop --chatgpt sol:high --claude opus:xhigh`, `/review-loop --chatgpt :medium` or `/review-loop --claude opus`; a ChatGPT model can be named by a unique part of its name. The branch must be pushed with an open PR, because the independent reviewer reads the PR on GitHub.
+Or let LXReview find the current branch's PR:
 
-The installer requires `uv` and installs a private Python environment, Playwright and Chrome under `~/.lxreview`. The only file it writes outside that directory is the command symlink `~/.local/bin/lxreview`, which `lxreview uninstall` removes again. It never modifies shell startup files or PATH; if `~/.local/bin` is not on your PATH, add it or call `~/.lxreview/bin/lxreview` directly. No OpenAI API key or credits are used. Claude Code must already be installed and authenticated. The GitHub CLI (`gh`) must be installed and logged in (`gh auth login`): every review pass reads the PR's discussion with it.
-
-## Two browser placements
-
-```mermaid
-flowchart LR
-  subgraph Workstation
-    Chrome --> Playwright[LXReview browser service] --> Relay[Authenticated operation relay]
-  end
-  Relay -->|SSH reverse tunnel, loopback only| MCP[LXPLUS reviewer MCP]
-  MCP --> Worker[Persistent Claude worker and repository]
+```text
+/review-loop
 ```
 
-Local-browser mode requires the workstation to stay online and awake:
+The branch must be pushed to its upstream and have an open, accessible PR because ChatGPT reads the code on GitHub. The command returns a run ID and follows progress in the same chat.
 
-```bash
-# On the exact LXPLUS host used by VS Code:
-lxreview setup --mode local-browser --role host
-lxreview pair
-# On the workstation, after bootstrapping there:
-lxreview setup --mode local-browser --role workstation
-lxreview pair <printed-code>
-lxreview login
+## What happens during a review?
+
+1. ChatGPT independently reviews the current PR in a fresh Temporary Chat.
+2. Claude evaluates substantial findings and eligible non-blocking findings against the code and PR discussion, including decisions already settled there.
+3. Claude runs the project's relevant checks on the unchanged code, implements accepted fixes, then checks again.
+4. Claude commits the fixes; LXReview pushes them and asks ChatGPT to review the updated PR.
+
+New check failures block publication. Pre-existing failures and checks that cannot run are reported. See [review decisions and verification](docs/OPERATIONS.md#review-decisions-and-verification) for the detailed policy.
+
+## Following and controlling a run
+
+**Closing the Claude chat does not stop the review run.** Watch it again from another conversation on the same LXPLUS host, or use the terminal. Ctrl-C in a terminal watch also stops only the watching.
+
+Replace `<run-id>` with the ID returned at startup; `lxreview runs` lists IDs and hosts.
+
+| Task | Claude Code | Terminal |
+| --- | --- | --- |
+| Follow | `/review-watch <run-id>` | `lxreview watch <run-id>` |
+| Check status | `/review-status <run-id>` | `lxreview status <run-id>` |
+| Inspect pass 1 | `/review-show <run-id> 1` | `lxreview show <run-id> --pass 1` |
+| Stop | `/review-stop <run-id>` | `lxreview stop <run-id>` |
+| Resume | `/review-resume <run-id>` | `lxreview resume <run-id>` |
+
+Resume is for failed, cancelled or interrupted runs and requires a clean, pushed checkpoint. Runs survive ordinary disconnection, subject to host policy, but not node reboot or drain.
+
+## Choosing models
+
+Defaults work without configuration. Override model and effort for one run:
+
+```text
+/review-loop --chatgpt sol:high --claude opus:xhigh
 ```
 
-Pairing codes last ten minutes. Relay credentials last at most eight hours; pair again for a new session. SSH authentication uses your existing SSH/Kerberos setup; authenticate interactively first if BatchMode cannot connect. Chrome's debugging protocol is never exposed or forwarded.
+`lxreview options` lists available choices. See [Configuration](docs/CONFIGURATION.md) for persistent defaults, pass limits and custom verification environments.
 
-```mermaid
-flowchart LR
-  subgraph Exact_LXPLUS_host
-    Worker[Persistent Claude worker] --> Reviewer[Reviewer contract]
-    Reviewer --> Service[LXReview browser service] --> Chrome[Chrome on private VNC desktop]
-  end
-  Laptop[Workstation VNC viewer] -. one-time normal login .-> Chrome
-```
+## Browser modes
 
-LXPLUS-browser mode survives ordinary workstation disconnection, subject to host supervision policy. It cannot survive node reboot/drain. With an AFS home, one installation serves every LXPLUS node, but runs and the browser belong to the node that started them: connect to that node to watch, stop or resume them. Services keep their sockets and temporary files in the node's `/run/user` directory. Long-running processes need your AFS token: `run` and `resume` refuse to start when it expires within two hours, `doctor` shows its expiry, and `kinit` followed by `aklog` renews it. `login` walks you through the SSH tunnel, a VNC viewer and the generated VNC password, then waits until ChatGPT is ready. Every review opens a fresh ChatGPT Temporary Chat, so ChatGPT memory and chat history never carry context between reviews, and review chats do not appear in your ChatGPT history. It skips these steps if you are already logged in. `lxreview desktop connect` prints the steps again, and `lxreview desktop password` shows the password. The password is shown only in an interactive terminal. Never transfer Chrome profiles between users.
+Use **`lxplus-browser`** for normal LXPLUS use and persistent runs.
 
-## Run lifecycle
+| Mode | Best for | Main trade-off |
+| --- | --- | --- |
+| `lxplus-browser` | Runs independent of your workstation | Browser runs on the LXPLUS host |
+| `local-browser` | Keeping the browser on your workstation | Workstation must stay online, awake and connected |
 
-```bash
-lxreview run https://github.com/owner/repo/pull/123 --repo /path/to/repo
-lxreview runs
-lxreview status <run-id> --json
-lxreview watch <run-id>
-lxreview show <run-id> --pass 1
-lxreview report <run-id> --output review-report.md
-lxreview stop <run-id>
-lxreview resume <run-id>
-```
+For the alternative mode, run `lxreview setup --mode local-browser --role host` on LXPLUS, then follow the [workstation setup and pairing steps](docs/OPERATIONS.md#local-browser).
 
-After starting a run, `/review-loop` follows it in the same chat: reviewer results, accepted and rejected findings with their reasons, what the worker's Claude says between steps, edits, commands, tests and pushes arrive as they happen. The worker's private reasoning is not shown. Closing the chat stops only the following, never the run. `/review-watch <run-id>` follows a run again from any Claude conversation on the same host, and `/review-status`, `/review-show`, `/review-stop` and `/review-resume` observe and control it. In a terminal, `watch` renders the same timeline (`--raw` prints the redacted JSON events). Ctrl-C stops watching only.
+## Common commands
 
-Before each independent review, the working tree must be clean and local HEAD, upstream branch and GitHub PR ref must agree (LXReview waits briefly for GitHub to update the PR ref after a push). A PR may come from a fork, including the fork's main branch; the base repository's main branch is never used. Every review starts a fresh Temporary Chat in the same managed browser tab, and previous findings are never sent to the reviewer.
+| Command | Purpose |
+| --- | --- |
+| `lxreview doctor` | Check setup and perform a ChatGPT smoke test |
+| `lxreview runs` | Find runs and their host |
+| `lxreview options` | List model and effort choices |
+| `lxreview update` | Verify/reinstall the current release's pinned runtimes |
+| `lxreview uninstall` | Remove integration and archive the installation |
 
-Claude evaluates every substantial finding and weighs the non-blocking ones against the repository and the PR's discussion on GitHub (description, comments, reviews and review threads, including whether they are resolved). A finding the discussion already settled, with a reason that still holds for the current code, is rejected with a reference to that comment, and the reviewer is asked not to reopen such points either. Claude accepts a non-blocking finding only when fixing it clearly improves the project with a small change within the PR's scope. It then fixes all accepted findings, verifies the fix, and commits it in a separate restricted turn. Every edit gets a fresh review; so that polish alone cannot keep a run going, a run fixes non-blocking findings without substantial ones at most once, and on the final pass accepted polish is reported instead of edited. The timeline lists every finding the reviewer reported. Verification follows the project: the worker runs the tests, type checks, linters or builds its CI configuration and contributor docs call for, one command at a time inside Claude Code's sandbox, offline and without shells or wrapper commands. The worker first runs these checks on the unmodified code. A check that fails because of the change blocks publication; failures that already occur without the change are reported but do not block, and a check that cannot run in the sandbox (missing tool, needs the network) is reported as not run. Commit hooks run inside the sandbox too. LXReview then pushes the commit itself, outside the sandbox, with your normal Git credentials (SSH agent, keychain or credential helper, Git LFS included), signing it first when your Git configuration asks for signed commits. It pushes with an explicit `git push <remote> HEAD:<branch>` to the branch's upstream, so `push.default` and push refspec settings do not matter; settings that redirect a push or run extra code (push URLs, URL rewrites, mirror remotes, hook paths, external diff tools) stop the run, and `doctor` lists any such global setting. Pre-push hooks are skipped for these pushes, because they could run files the worker changed. A push failure stops the run with the commit kept locally. Final-pass issues produce `MAX_PASSES` without unreviewed edits. An inaccessible or malformed review never counts as success.
+Run controls are listed above. See [Operations](docs/OPERATIONS.md) for application upgrades, reports and recovery.
 
-The worker never inherits your shell's PATH or startup files. Checks find the project's tools in its own environments (`.venv`, `node_modules/.bin`, pixi), the usual per-user toolchain directories (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`, Homebrew and similar) and anything you configure under `[verify]` in `~/.lxreview/config/config.toml`:
+## Troubleshooting
 
-```toml
-[verify]
-path = ["/opt/mytools/bin"]          # extra tool directories
-env = { CI = "1" }                   # extra variables for every check
-test_workers = "auto"                # parallel full test runs: "auto" (all CPUs), a number, or "off"
+- Run `lxreview doctor`; use `--no-smoke` to avoid consuming a ChatGPT turn.
+- Check `gh auth status` and ensure your clean, pushed branch matches the PR.
+- On AFS, `run` and `resume` require at least two hours of token lifetime; renew with `kinit` followed by `aklog`.
+- After setup changes, open a fresh Claude Code conversation to load the integration.
 
-[verify.setup]                       # a command that prepares a repository's environment
-"/home/me/analysis" = "source /cvmfs/sw.hsf.org/key4hep/setup.sh -r 2026-04-08"
-```
+More help: [Operations and troubleshooting](docs/OPERATIONS.md#troubleshooting).
 
-Both reviewers can be told which model and how much reasoning to use:
+## More documentation
 
-```toml
-[reviewer]                           # the independent ChatGPT review
-model = "GPT-5.6 Sol"                # as ChatGPT's picker names it, or a unique part ("sol"); "default" keeps ChatGPT's choice
-reasoning_effort = "high"            # medium by default; instant, high, ... or "highest", the top level your plan offers
+- [Configuration](docs/CONFIGURATION.md)
+- [Browser setup and operations](docs/OPERATIONS.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security](SECURITY.md)
+- [Development](docs/ARCHITECTURE.md#development)
+- [Third-party notices](THIRD_PARTY.md)
 
-[worker]                             # Claude's evaluation, fix and commit turns
-model = "opus"                       # a Claude Code model alias or full name; "default" uses Claude Code's
-effort = "xhigh"                     # low, medium, high, xhigh, max or default
-```
-
-`lxreview options` lists what can be chosen (ChatGPT's list is read live from its model picker, or from the last check while a review is using the browser). A single run can override the configuration with `lxreview run <PR> --chatgpt MODEL[:EFFORT] --claude MODEL[:EFFORT]`; `resume` keeps a run's choices. Before each review, LXReview selects the chosen model and reasoning level in the fresh Temporary Chat and reads both back; a model or level ChatGPT does not offer, or one that does not stick, stops the run before anything is sent, with the choices that are available. ChatGPT keeps the selection as your account default, so every run sets its reasoning level explicitly rather than inheriting the last one used. `lxreview setup` saves only settings that differ from the defaults. Each pass's `reviewer.json` and the timeline record the model and level that answered.
-
-The setup command runs once per worker, outside the sandbox, and its exported variables are kept for every check (for a CVMFS stack, a conda environment or `module load`). It must not source files from the repository, which the worker may change. CVMFS repositories that the setup or `path` mention, or that are already mounted, stay mounted while the worker runs. Caches are private to each turn. Files outside the repository are readable to checks except credentials and private data (SSH, cloud and registry credentials, `~/.config`, browser and Claude data, shell histories, `.env` files); nothing outside the repository is writable. While a sandboxed command runs, the sandbox puts empty read-only placeholders at paths such as `.bashrc`, `.mcp.json` or `.claude/settings.json` so the command cannot create them; they disappear when the command ends, and LXReview keeps them out of `git status` for the duration of a run.
-
-State and redacted events live under `~/.lxreview/state/runs/<id>`. Verbatim reviews, explicit evaluations, diffs, test reports and metadata live under the repository's Git common directory, `review-loop/<id>`. Worktrees are supported. Hidden model reasoning is excluded from events. Resume requires a clean, pushed checkpoint; interrupted pass artifacts are retained.
-
-## Operations
-
-`start`, `status`, `stop`, `restart`; `options`; `desktop start|stop|status|connect`; `bridge status|stop`; `doctor --json` and `doctor --no-smoke`; `version`; `update`; `cleanup`.
-
-`doctor` performs a real assistant-turn smoke test by default. `--no-smoke` avoids consuming a ChatGPT turn. It never treats a GPU warning alone as browser failure. New MCP registration may require a new Claude conversation. `setup --skip-runtime --skip-integration` is intended for development, not a ready-to-use install.
-
-`update` verifies/reinstalls the current release's pinned browser runtimes; it does not chase latest upstream packages. Application upgrades use `lxreview update --source /path/to/reviewed/checkout`: a frozen private release is smoke-tested before the launcher switches atomically. `lxreview update --rollback` restores the previous launcher. Do not run updates during active reviews.
-
-## Removal
-
-Stop active runs, then run `lxreview uninstall`. Only unchanged LXReview-owned Claude entries and symlinks are removed. The installation root is moved to a private recovery archive whose path is printed; delete it to remove browser state and runtimes completely. Git audit logs are retained and may be removed separately. Shell configuration and unrelated tools are untouched. If the installation folder was deleted by hand instead, rerun `python3 scripts/bootstrap.py`: it recognizes the leftovers and prints the commands that stop any services still running. The following `setup` reuses the existing Claude Code entries, so a later `uninstall` still removes them.
-
-## Development
-
-```bash
-uv sync --frozen
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv build
-```
-
-See [architecture](docs/ARCHITECTURE.md), [security](SECURITY.md), and [third-party notices](THIRD_PARTY.md).
-
-Browser automation is not an official OpenAI, Anthropic or CERN integration. Each user authenticates their own ChatGPT account through normal browser login. UI changes can break automation; no CAPTCHA or MFA bypass is provided.
+Browser automation is not an official OpenAI, Anthropic or CERN integration. UI changes can break it; each user logs in normally, with no CAPTCHA or MFA bypass.

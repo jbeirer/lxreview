@@ -1,12 +1,59 @@
 # Architecture
 
-`contracts.py` owns normalized requests, responses, health, reviewer and browser-session protocols. `worker.py` owns the provider-neutral review loop. `reviewer.py` owns independent review semantics. `browser/playwright.py` owns the ChatGPT page driver: every selector, the page-state script, prompt readback, submission and completion rules. `browser/service.py` runs that driver in a supervised process that owns Chrome and serves the named operations on a private unix socket. `backend.py` is the composition root; neither workflow prompts nor worker logic branch on browser placement.
+For setup and run control, see [Operations](OPERATIONS.md). For trust boundaries and publication restrictions, see [Security](../SECURITY.md).
 
-`bridge/relay.py` transports named browser operations; a whole review holds the workstation session lock across navigation, readiness and submission. `bridge/ssh.py` owns exact-host pairing and reverse forwarding. `mcp/server.py` exports a stable package-owned stdio API. `process.py` supervises package-scoped services using systemd, tmux under a systemd scope, or launchd. Configuration uses strict TOML/Pydantic; schema 1 is the initial schema and unknown versions fail with an upgrade instruction rather than being rewritten.
+## Components
 
-The full review loop owns one cross-process reviewer lock and one repository lock. Each pass creates a new conversation in the same session. Raw review is persisted first. Claude uses three restricted turns in the same session: read-only evaluation, offline edits/tests without Git metadata writes, then Git publication after successful tests. The next pass receives only the PR target, updated SHA and rubric. No review history is sent to the independent reviewer.
+| Module | Responsibility |
+| --- | --- |
+| `contracts.py` | Normalized requests, responses, health, reviewer and browser-session protocols |
+| `worker.py` | Provider-neutral review loop |
+| `reviewer.py` | Independent review semantics and prompts |
+| `browser/playwright.py` | ChatGPT selectors, page state, prompt readback, submission and completion rules |
+| `browser/service.py` | Supervised driver process that owns Chrome and serves named operations over a private Unix socket |
+| `backend.py` | Composition root; workflow prompts and worker logic do not branch on browser placement |
+| `bridge/relay.py` | Named browser operations, with a workstation session lock across a whole review |
+| `bridge/ssh.py` | Exact-host pairing and reverse forwarding |
+| `mcp/server.py` | Stable package-owned stdio API for browser operations |
+| `process.py` | Package-scoped supervision through systemd, tmux under a systemd scope, or launchd |
 
-State transitions:
+Configuration uses strict TOML/Pydantic. Schema 1 is the initial schema; unknown versions fail with an upgrade instruction rather than being rewritten. User settings are described in [Configuration](CONFIGURATION.md).
+
+## Browser placement
+
+In `lxplus-browser` mode, the worker and browser run on the same host:
+
+```mermaid
+flowchart LR
+    Worker[Persistent Claude worker] --> Reviewer[Reviewer contract]
+    Reviewer --> Service[Browser service]
+    Service --> Chrome[Chrome on private VNC desktop]
+    Viewer[Workstation VNC viewer] -. login .-> Chrome
+```
+
+In `local-browser` mode, the browser service runs on the workstation:
+
+```mermaid
+flowchart LR
+    Worker[Worker on LXPLUS] --> Reviewer[Reviewer contract]
+    Reviewer --> Relay[Authenticated operation relay]
+    Relay --> Service[Workstation browser service]
+    Service --> Chrome[Workstation Chrome]
+```
+
+The relay is reached through a loopback-only SSH reverse tunnel to the exact LXPLUS node. MCP exposes the browser contract to Claude Code; the worker calls the reviewer backend directly. Browser authentication and transport boundaries are detailed in [Security](../SECURITY.md).
+
+## Worker lifecycle
+
+The full review loop holds one cross-process reviewer lock and one repository lock. Each pass creates a fresh Temporary Chat in the same browser tab and persists the raw review before invoking Claude. The independent reviewer receives only the PR target, updated SHA and rubric, never earlier review findings.
+
+Claude uses three restricted turns in one Claude session:
+
+1. Read-only evaluation of findings against the repository and PR discussion.
+2. Offline edits and checks, without Git metadata writes.
+3. Staging and committing after verification permits publication.
+
+LXReview validates the resulting commit and pushes it outside those turns. The [operations policy](OPERATIONS.md#review-decisions-and-verification) covers findings, baseline checks and final-pass behavior.
 
 ```mermaid
 stateDiagram-v2
@@ -23,6 +70,37 @@ stateDiagram-v2
     INTERRUPTED --> QUEUED: verified resume
 ```
 
-Resume requires matching branch/remote and clean, pushed HEAD. Incomplete pass evidence is archived before a new independent pass; a dirty partial edit is never silently committed. The durable cancel marker wins over later worker state updates. Host identity protects shared-home LXPLUS users from treating another node's service as local. Supervisor names include an installation-root hash to avoid cross-installation collisions. Sockets and service temporary files live in a node-local runtime directory (`/run/user/<uid>/lxreview-<hash>`) under the same hash, because AFS homes cannot hold unix sockets; `run` and `resume` refuse to start when the AFS token for the installation or repository expires within two hours. `update` keeps only the current and previous application environments.
+Resume verifies branch/remote identity and a clean, pushed HEAD. Incomplete pass evidence is archived before another independent pass. A durable cancellation marker wins over later worker state updates; observing a missing worker marks a nonterminal run interrupted.
 
-The absolute package launcher lives under `~/.lxreview/bin`, and bootstrap links it as `~/.local/bin/lxreview` when that name is free (uninstall removes only a link to its own launcher). Claude user integration points back to the absolute launcher; shell startup files and PATH are untouched.
+## Hosts, storage and integration
+
+Host identity prevents shared-home LXPLUS users from treating another node's services as local. Supervisor names include an installation-root hash to avoid collisions between installations. Sockets and service temporary files live in `/run/user/<uid>/lxreview-<hash>` when available, falling back to the installation's `run` directory; AFS homes cannot hold Unix sockets.
+
+| Location | Contents |
+| --- | --- |
+| `~/.lxreview/bin/lxreview` | Absolute package launcher |
+| `~/.local/bin/lxreview` | Bootstrap-created symlink when the name is free |
+| `~/.lxreview/state/runs/<id>/` | Run state, redacted events, worker output, Claude session ID and cancellation marker |
+| `<git-common-dir>/review-loop/<id>/` | Run metadata, events, summary and per-pass evidence |
+| `<git-common-dir>/review-loop/<id>/pass-NN/` | Verbatim review, explicit evaluations, PR discussion, diff, check reports and metadata |
+
+Using the Git common directory keeps audit evidence out of commits and supports worktrees. Interrupted pass directories are retained with an `-interrupted-*` suffix. Events exclude hidden reasoning and redact credential-shaped values; raw reviews remain verbatim. See [Security](../SECURITY.md) before sharing artifacts.
+
+Claude's user integration registers the MCP server and six slash commands pointing to the absolute launcher. Ownership records allow uninstall to remove only unchanged package-owned entries. Bootstrap and setup leave shell startup files and PATH untouched.
+
+During sandboxed commands, Claude Code creates empty, read-only placeholders for protected paths such as `.bashrc`, `.mcp.json` and `.claude/settings.json`. They disappear after the command, and LXReview excludes them from `git status` during the run. The full filesystem boundary is documented in [Security](../SECURITY.md).
+
+## Development
+
+From the source checkout:
+
+```bash
+uv sync --frozen
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv build
+```
+
+The default test suite does not require a live browser or account login. See [third-party notices](../THIRD_PARTY.md) for runtime dependencies.
