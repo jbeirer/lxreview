@@ -70,7 +70,7 @@ worker_timeout = 7200
 
 ## Verification environment
 
-The worker does not inherit your shell's PATH or startup files. It finds project tools in `.venv`, `node_modules/.bin` and pixi environments, then configured paths and usual user toolchain directories such as `~/.local/bin`, `~/.cargo/bin`, `~/go/bin` and Homebrew.
+The worker does not inherit your shell's PATH or startup files. It finds project tools in Python virtual environments at the top of the repository (`.venv`, `py-venv` or any other name), `node_modules/.bin` and pixi environments, then configured paths and usual user toolchain directories such as `~/.local/bin`, `~/.cargo/bin`, `~/go/bin` and Homebrew.
 
 ```toml
 [verify]

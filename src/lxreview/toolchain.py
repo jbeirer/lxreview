@@ -18,7 +18,8 @@ from .paths import Paths
 from .process import environment
 
 SYSTEM_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
-# Tool directories that projects create inside the repository.
+# Tool directories that projects create inside the repository. Python virtual environments
+# with any other name at the top level are found by their pyvenv.cfg.
 REPOSITORY_BIN = (".venv/bin", "venv/bin", "env/bin", "node_modules/.bin", ".pixi/envs/default/bin")
 # Per-user toolchain installers.
 HOME_BIN = (
@@ -58,10 +59,23 @@ RESERVED = {
 }
 
 
+def repository_bins(repo: Path) -> list[Path]:
+    directories = [repo / d for d in REPOSITORY_BIN]
+    try:
+        entries = sorted(repo.iterdir())
+    except OSError:
+        return directories
+    for entry in entries:
+        if (entry / "pyvenv.cfg").is_file() and (entry / "bin").is_dir():
+            if entry / "bin" not in directories:
+                directories.append(entry / "bin")
+    return directories
+
+
 def search_path(repo: Path, config: Config, inherited: str = "") -> str:
     home = Path.home()
     candidates = [
-        *(str(repo / d) for d in REPOSITORY_BIN),
+        *(str(d) for d in repository_bins(repo)),
         *config.verify.path,
         *[d for d in inherited.split(os.pathsep) if d],
         *(str(home / d) for d in HOME_BIN),

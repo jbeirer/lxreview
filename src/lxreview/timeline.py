@@ -35,7 +35,8 @@ def result_text(block: dict) -> str:
 
 def guard_refusal(block: dict) -> bool:
     """The worker guard declined a tool call. That is policy, not a failure: Claude reads
-    the reason and adapts, so the timeline leaves both the call and the refusal out."""
+    the reason and adapts. Hide the pair when possible; explain a refusal if its call
+    was already displayed by a live watch."""
     return (
         block.get("type") == "tool_result"
         and bool(block.get("is_error"))
@@ -53,10 +54,24 @@ def refused_calls(events: list[dict]) -> set[str]:
     return ids
 
 
-def claude_activity(event: dict, limit: int = 100, hidden: set[str] | None = None) -> list[str]:
+def refusal_reason(block: dict) -> str:
+    text = result_text(block)
+    match = re.match(r"PreToolUse:\S+ hook error: \[.*?\]: (.+)", text, re.S)
+    return (match.group(1) if match else text).strip()
+
+
+def claude_activity(
+    event: dict,
+    limit: int = 100,
+    hidden: set[str] | None = None,
+    shown: set[str] | None = None,
+) -> list[str]:
     """Summarize one Claude stream-json event: what Claude says, edits, shell commands,
     failures, long-running commands and turn ends. Thinking never reaches the timeline;
-    redaction removed it."""
+    redaction removed it.
+
+    `shown` collects the calls already printed. A live watch may print a call before its
+    guard refusal arrives; the refusal is then named instead of silently dropped."""
     kind = event.get("type")
     if kind == "tool_progress":
         seconds = event.get("elapsed_time_seconds")
@@ -90,16 +105,29 @@ def claude_activity(event: dict, limit: int = 100, hidden: set[str] | None = Non
                 lines.append(f"Editing {data.get('file_path', '?')}")
             elif name == "Bash":
                 lines.append(f"$ {shorten(data.get('command', ''), limit)}")
-        elif block.get("type") == "tool_result" and block.get("is_error"):
-            if not guard_refusal(block):
+            else:
+                continue
+            if shown is not None:
+                shown.add(str(block.get("id")))
+        elif block.get("type") == "tool_result":
+            if block.get("is_error") and not guard_refusal(block):
                 lines.append(f"Failed: {shorten(result_text(block), limit)}")
+            elif guard_refusal(block) and str(block.get("tool_use_id")) in (shown or set()):
+                lines.append(f"  refused by the guard: {shorten(refusal_reason(block), limit)}")
+            if shown is not None:
+                shown.discard(str(block.get("tool_use_id")))
     return lines
 
 
-def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> list[str]:
+def describe(
+    event: dict,
+    limit: int = 100,
+    hidden: set[str] | None = None,
+    shown: set[str] | None = None,
+) -> list[str]:
     kind, n = event.get("kind"), event.get("pass_number", "?")
     if kind == "claude":
-        texts = claude_activity(event.get("event") or {}, limit, hidden)
+        texts = claude_activity(event.get("event") or {}, limit, hidden, shown)
     elif kind == "run_created":
         texts = ["Run created"]
     elif kind == "resumed":
@@ -168,10 +196,11 @@ def describe(event: dict, limit: int = 100, hidden: set[str] | None = None) -> l
     return [f"{clock(event.get('time', ''))}  {text}" for text in texts]
 
 
-def render(events: list[dict], limit: int = 100) -> list[str]:
-    """Timeline lines for a batch of events, without guard-refused calls."""
+def render(events: list[dict], limit: int = 100, shown: set[str] | None = None) -> list[str]:
+    """Timeline lines for a batch of events, without guard-refused calls. A live watch
+    passes the same `shown` set for every batch (see `claude_activity`)."""
     hidden = refused_calls(events)
-    return [line for event in events for line in describe(event, limit, hidden)]
+    return [line for event in events for line in describe(event, limit, hidden, shown)]
 
 
 def style(text: str) -> str:

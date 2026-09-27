@@ -486,6 +486,7 @@ def watch(
     paths, config = context()
     store = RunStore(paths, run_id)
     offset, shown = 0, None
+    shown_calls: set[str] = set()
 
     def show(lines: list[str]) -> None:
         if not lines:
@@ -519,7 +520,7 @@ def watch(
                     if raw:
                         typer.echo(line.rstrip("\n"))
             if not raw:
-                show(render(events, limit=240))
+                show(render(events, limit=240, shown=shown_calls))
             current = (state["status"], state["pass"], state["phase"])
             if not raw and current != shown:
                 colour = {
@@ -562,6 +563,7 @@ def _watch_chat(run_id: str, after: int) -> None:
     store = RunStore(paths, run_id)
     deadline = time.monotonic() + CHAT_WATCH_SECONDS
     offset, seen, shown = 0, 0, None
+    shown_calls: set[str] = set()
 
     def emit(lines: list[str]) -> None:
         if lines:
@@ -577,13 +579,17 @@ def _watch_chat(run_id: str, after: int) -> None:
             while (line := stream.readline()).endswith("\n"):
                 offset = stream.tell()
                 seen += 1
-                if seen <= after:
-                    continue
                 try:
-                    events.append(json.loads(line))
+                    event = json.loads(line)
                 except ValueError:
                     continue
-        lines = render(events, limit=240)
+                if seen <= after:
+                    # Restore pending calls across Monitor watch continuations without
+                    # replaying their text, so a later refusal is still explained.
+                    render([event], shown=shown_calls)
+                else:
+                    events.append(event)
+        lines = render(events, limit=240, shown=shown_calls)
         current = (state["status"], state["pass"], state["phase"])
         status = (
             f"Status {state['status']}, pass {state['pass']}/{state['max_passes']}"
@@ -1072,10 +1078,14 @@ def worker(run_id: str):
 
 
 @app.command(hidden=True)
-def guard(repo: Path = typer.Option(..., "--repo"), phase: str = typer.Option("edit", "--phase")):
+def guard(
+    repo: Path = typer.Option(..., "--repo"),
+    phase: str = typer.Option("edit", "--phase"),
+    scratch: Path | None = typer.Option(None, "--scratch"),
+):
     from .security import hook
 
-    raise typer.Exit(hook(repo.resolve(), phase))
+    raise typer.Exit(hook(repo.resolve(), phase, scratch.resolve() if scratch else None))
 
 
 @app.command(hidden=True)

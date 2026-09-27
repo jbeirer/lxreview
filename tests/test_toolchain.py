@@ -33,6 +33,18 @@ def test_project_tools_come_first_and_only_existing_directories_are_searched(tmp
     assert path[-3:] == ["/bin", "/usr/sbin", "/sbin"] and path.count("/usr/bin") == 1
 
 
+def test_repository_virtual_environments_are_found_by_pyvenv_cfg(tmp_path, home):
+    repo = tmp_path / "repo"
+    (repo / "py-venv/bin").mkdir(parents=True)
+    (repo / "py-venv/pyvenv.cfg").write_text("home = /usr/bin\n")
+    (repo / "docs/bin").mkdir(parents=True)
+    (repo / ".venv/bin").mkdir(parents=True)
+    (repo / ".venv/pyvenv.cfg").write_text("")
+    path = toolchain.search_path(repo, Config()).split(":")
+    assert path[:2] == [str(repo / ".venv/bin"), str(repo / "py-venv/bin")]
+    assert str(repo / "docs/bin") not in path and path.count(str(repo / ".venv/bin")) == 1
+
+
 def test_push_never_finds_tools_inside_the_repository(paths, home):
     path = toolchain.push_environment(paths, Config())["PATH"].split(":")
     assert str(home / ".cargo/bin") in path

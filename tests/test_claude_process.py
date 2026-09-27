@@ -70,6 +70,27 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':{'finding
     assert not Path((paths.root / "turn-tmpdir").read_text()).exists()
 
 
+async def test_edit_turn_guard_accepts_the_scratch_directory_the_prompt_names(
+    paths, store, tmp_path
+):
+    executable = tmp_path / "fake-claude"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + """import json,os,re,shlex,sys
+settings=json.load(open(sys.argv[sys.argv.index('--settings')+1]))
+hook=shlex.split(settings['hooks']['PreToolUse'][0]['hooks'][0]['command'])
+work=re.search(r'Writable scratch directory for build output and other temporary files: (\\S+) ',sys.stdin.read()).group(1)
+assert hook[hook.index('--scratch')+1]==work and os.path.isdir(work)
+print(json.dumps({'type':'result','is_error':False,'structured_output':{'tests':['pytest: PASSED'],'tests_passed':True,'preexisting_failures':[],'summary':'ok'}}),flush=True)
+"""
+    )
+    executable.chmod(0o700)
+    config = Config()
+    config.runtime.claude = str(executable)
+    result = await claude_turn(paths, config, store, "edit", worker.EditResult, read_only=False)
+    assert result.tests_passed
+
+
 async def test_cancel_terminates_owned_child(paths, store, tmp_path):
     executable = tmp_path / "sleeping-claude"
     executable.write_text(

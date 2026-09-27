@@ -212,18 +212,42 @@ def secret(value: str, repo: Path) -> bool:
     )
 
 
-def readable(value: str, repo: Path) -> bool:
+def session_outputs(event: dict) -> Path | None:
+    """Where Claude Code saves this session's oversized tool results for Claude to Read.
+
+    They sit next to the session transcript (<session-id>.jsonl) in Claude's own, otherwise
+    secret configuration directory, and hold only output of calls the guard allowed.
+    """
+    session, transcript = event.get("session_id"), event.get("transcript_path")
+    if not (isinstance(session, str) and isinstance(transcript, str)):
+        return None
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", session):
+        return None
+    transcript_file = Path(transcript)
+    if not transcript_file.is_absolute() or transcript_file.name != f"{session}.jsonl":
+        return None
+    return transcript_file.parent.resolve() / session / "tool-results"
+
+
+def readable(value: str, repo: Path, outputs: Path | None = None) -> bool:
     """Anything but secrets, and Git internals (remote URLs can hold credentials)."""
     candidate, resolved = resolve(value, repo)
+    if outputs and resolved.is_relative_to(outputs):
+        return True
     inside = resolved.is_relative_to(repo.resolve())
     return not secret(value, repo) and not (inside and ".git" in resolved.parts)
 
 
-def safe_path(value: str, repo: Path) -> bool:
-    """Writable by the worker: inside the repository, no secret and no protected config."""
+def safe_path(value: str, repo: Path, scratch: Path | None = None) -> bool:
+    """Writable by the worker: inside the repository or the turn's scratch directory, no
+    secret and no protected config."""
     candidate, resolved = resolve(value, repo)
     return (
-        resolved.is_relative_to(repo.resolve())
+        (
+            resolved.is_relative_to(repo.resolve())
+            or scratch is not None
+            and resolved.is_relative_to(scratch.resolve())
+        )
         and not secret(value, repo)
         and not any(p in CONFIG_NAMES for p in (*candidate.parts, *resolved.parts))
     )
@@ -254,7 +278,9 @@ def shell_unsafe(command: str) -> bool:
     return quote is not None
 
 
-def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
+def allowed(
+    event: dict, repo: Path, phase: str = "edit", scratch: Path | None = None
+) -> tuple[bool, str]:
     tool, data = event.get("tool_name"), event.get("tool_input", {})
     if phase not in ("evaluate", "edit", "publish"):
         return False, "Unknown worker phase"
@@ -271,12 +297,13 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
     if tool in ("Write", "Edit", "MultiEdit"):
         name = data.get("file_path", "")
         return (
-            isinstance(name, str) and bool(name) and safe_path(name, repo),
-            "Edits must stay within the repository and outside protected paths",
+            isinstance(name, str) and bool(name) and safe_path(name, repo, scratch),
+            "Edits must stay within the repository or the scratch directory and outside"
+            " protected paths",
         )
     if tool in ("Read", "Glob", "Grep"):
         name = data.get("file_path", data.get("path", "."))
-        ok = isinstance(name, str) and readable(name, repo)
+        ok = isinstance(name, str) and readable(name, repo, session_outputs(event))
         if tool in ("Glob", "Grep"):
             pattern = data.get("pattern", "")
             ok = (
@@ -405,19 +432,19 @@ def allowed(event: dict, repo: Path, phase: str = "edit") -> tuple[bool, str]:
             continue
         if secret(value, repo):
             return False, "Secrets are not readable"
-        if Path(exe).name in MODIFYING and not safe_path(value, repo):
+        if Path(exe).name in MODIFYING and not safe_path(value, repo, scratch):
             return False, "Files outside the repository cannot be modified"
     if Path(exe).name in MODIFYING and any(
-        not x.startswith("-") and not safe_path(x, repo) for x in args[1:]
+        not x.startswith("-") and not safe_path(x, repo, scratch) for x in args[1:]
     ):
         return False, "Files outside the repository cannot be modified"
     return True, ""
 
 
-def hook(repo: Path, phase: str = "edit") -> int:
+def hook(repo: Path, phase: str = "edit", scratch: Path | None = None) -> int:
     try:
         event = json.load(sys.stdin)
-        ok, reason = allowed(event, repo, phase)
+        ok, reason = allowed(event, repo, phase, scratch)
     except Exception:
         ok, reason = False, "Invalid guardrail input"
     if not ok:

@@ -103,7 +103,10 @@ async def claude_turn(
     work.mkdir(mode=0o700)
     git_common = Path(state["audit"]).parent.parent
     phase = "evaluate" if read_only else "publish" if schema is PublishResult else "edit"
-    hook_cmd = shlex.join([str(paths.executable), "guard", "--repo", str(repo), "--phase", phase])
+    hook_cmd = shlex.join(
+        [str(paths.executable), "guard", "--repo", str(repo), "--phase", phase]
+        + (["--scratch", str(work)] if phase == "edit" else [])
+    )
     write_json(
         settings_file,
         {

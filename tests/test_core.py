@@ -1,5 +1,6 @@
 import json
 import shlex
+from pathlib import Path
 
 import pytest
 
@@ -239,6 +240,60 @@ def test_symlink_and_external_writes_denied(tmp_path):
     for path in ("link/file", ".git/config", "../secret", ".claude/settings.json"):
         assert not allowed({"tool_name": "Write", "tool_input": {"file_path": path}}, repo)[0]
     assert not allowed({"tool_name": "Agent", "tool_input": {}}, repo)[0]
+
+
+def test_scratch_directory_writable_only_when_the_worker_names_it(tmp_path):
+    repo, scratch = tmp_path / "repo", tmp_path / "turn" / "work"
+    repo.mkdir()
+    scratch.mkdir(parents=True)
+    write = {"tool_name": "Write", "tool_input": {"file_path": str(scratch / "probe.py")}}
+    assert not allowed(write, repo)[0]
+    assert allowed(write, repo, "edit", scratch)[0]
+    for command in (f"mkdir {scratch}/site", f"touch {scratch}/x", f"cp README.md {scratch}/x"):
+        event = {"tool_name": "Bash", "tool_input": {"command": command}}
+        assert not allowed(event, repo)[0]
+        assert allowed(event, repo, "edit", scratch)[0], command
+    for path in (tmp_path / "turn" / "cache" / "x", scratch / ".git" / "config", tmp_path / "x"):
+        event = {"tool_name": "Write", "tool_input": {"file_path": str(path)}}
+        assert not allowed(event, repo, "edit", scratch)[0], path
+
+
+def test_only_this_sessions_saved_tool_output_is_readable(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    session, other = "74188205-2a75-4a1d-aaaa-85a4844100ee", "11111111-2a75-4a1d-aaaa-85a4844100ee"
+    project = home / ".claude/projects/-repo"
+    saved = project / session / "tool-results" / "blsgl8po9.txt"
+    hook_input = {"session_id": session, "transcript_path": str(project / f"{session}.jsonl")}
+
+    def event(tool, path, **extra):
+        key = "file_path" if tool == "Read" else "path"
+        return {"tool_name": tool, "tool_input": {key: str(path), **extra}, **hook_input}
+
+    assert allowed(event("Read", saved), repo, "evaluate")[0]
+    assert allowed(event("Grep", saved, pattern="^/usr/(local/)?bin:"), repo)[0]
+    assert allowed(event("Glob", saved.parent, pattern="*.txt"), repo)[0]
+    for path in (
+        project / f"{session}.jsonl",
+        project / other / "tool-results" / "x.txt",
+        saved.parent / ".." / ".." / f"{session}.jsonl",
+        home / ".claude.json",
+    ):
+        assert not allowed(event("Read", path), repo)[0], path
+    # Without a matching transcript the directory stays as secret as the rest of ~/.claude.
+    for forged in (
+        {"transcript_path": str(project / f"{other}.jsonl")},
+        {"transcript_path": f"{session}.jsonl"},
+        {"session_id": "../../x", "transcript_path": str(project / "../../x.jsonl")},
+        {"transcript_path": None},
+    ):
+        assert not allowed({**event("Read", saved), **forged}, repo)[0], forged
+    # Commands stay unable to read it (the sandbox hides ~/.claude from them too).
+    assert not allowed(
+        {"tool_name": "Bash", "tool_input": {"command": f"cat {saved}"}, **hook_input}, repo
+    )[0]
 
 
 def test_rotating_log_redacts_credentials(paths):
@@ -492,3 +547,33 @@ def test_timeline_separates_preexisting_check_failures():
     texts = [line.split("  ", 1)[-1].strip() for line in describe(event)]
     assert texts[0].endswith("Checks PASS (1 pre-existing failures)")
     assert "pre-existing: test_io: fails identically before the edit" in texts
+
+
+def test_scratch_and_session_output_exceptions_do_not_follow_escaping_symlinks(
+    tmp_path, monkeypatch
+):
+    home, repo, scratch = tmp_path / "home", tmp_path / "repo", tmp_path / "scratch"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    repo.mkdir()
+    scratch.mkdir()
+    (scratch / "escape").symlink_to(tmp_path, target_is_directory=True)
+    write = {"tool_name": "Write", "tool_input": {"file_path": str(scratch / "escape/x")}}
+    assert not allowed(write, repo, "edit", scratch)[0]
+    write["tool_input"]["file_path"] = str(scratch / "ok.py")
+    for phase in ("evaluate", "publish"):
+        assert not allowed(write, repo, phase, scratch)[0]
+
+    session = "74188205-2a75-4a1d-aaaa-85a4844100ee"
+    project = home / ".claude/projects/-repo"
+    outputs = project / session / "tool-results"
+    outputs.mkdir(parents=True)
+    secret = home / ".claude.json"
+    secret.write_text("private")
+    (outputs / "escape.txt").symlink_to(secret)
+    event = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(outputs / "escape.txt")},
+        "session_id": session,
+        "transcript_path": str(project / f"{session}.jsonl"),
+    }
+    assert not allowed(event, repo)[0]

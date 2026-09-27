@@ -39,6 +39,14 @@ def test_guard_cli_matches_worker_hook_invocation(paths, tmp_path, monkeypatch):
         input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git reset --hard"}}),
     )
     assert denied.exit_code == 2
+    scratch = tmp_path.parent / f"{tmp_path.name}-work"
+    scratch.mkdir()
+    write = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(scratch / "x")}})
+    for extra, code in (([], 2), (["--scratch", str(scratch)], 0)):
+        result = runner.invoke(
+            app, ["guard", "--repo", str(tmp_path), "--phase", "edit", *extra], input=write
+        )
+        assert result.exit_code == code, result.output
 
 
 def test_restart_calls_stop_with_concrete_argument(monkeypatch):
@@ -193,6 +201,41 @@ def test_timeline_hides_guard_refusals_and_names_real_failures():
     ]
     assert style("Failed: x") == "red" and style("ACCEPTED  S1 x") == "bold green"
     assert style("Reviewer pass 1 complete, CLEAN") == "bold green"
+
+
+def test_live_timeline_names_a_refusal_that_arrives_after_its_call():
+    from lxreview.timeline import render
+
+    def claude(role, block):
+        return {
+            "kind": "claude",
+            "time": "",
+            "event": {"type": role, "message": {"content": [block]}},
+        }
+
+    call = claude(
+        "assistant",
+        {"type": "tool_use", "id": "w1", "name": "Write", "input": {"file_path": "/tmp/x.py"}},
+    )
+    refusal = claude(
+        "user",
+        {
+            "type": "tool_result",
+            "tool_use_id": "w1",
+            "is_error": True,
+            "content": "PreToolUse:Write hook error: [/x/lxreview guard --repo /r --phase edit]:"
+            " Edits must stay within the repository\n",
+        },
+    )
+    shown: set[str] = set()
+    first = render([call], shown=shown)
+    second = render([refusal], shown=shown)
+    assert [line.split("  ", 1)[1] for line in first + second] == [
+        "Editing /tmp/x.py",
+        "  refused by the guard: Edits must stay within the repository",
+    ]
+    # In one batch the refused call is left out entirely, as before.
+    assert render([call, refusal], shown=set()) == []
 
 
 def test_chat_watch_ends_before_the_monitor_limit_and_names_the_continuation(
@@ -539,3 +582,57 @@ def test_run_describes_its_choices_in_words(choices, reviewer, worker):
     assert reviewer is None or described["reviewer"] == reviewer
     # No MODEL:EFFORT codes such as default:default reach the user.
     assert ":" not in "".join(described.values())
+
+
+def test_chat_watch_continuation_explains_refusal_without_replaying_call(
+    paths, tmp_path, monkeypatch
+):
+    import lxreview.cli as cli
+    from lxreview.config import Config
+    from lxreview.runs import RunStore
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    Config().save(paths)
+    identity = {"head": "a" * 40, "branch": "f", "upstream": "origin/f", "remote_url": "u"}
+    store = RunStore.create(
+        paths, tmp_path, "https://github.com/org/repo/pull/1", identity, 5, tmp_path / "audit"
+    )
+    store.event(
+        "claude",
+        event={
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "w1",
+                        "name": "Write",
+                        "input": {"file_path": "/tmp/x.py"},
+                    }
+                ]
+            },
+        },
+    )
+    after = len((store.directory / "events.jsonl").read_text().splitlines())
+    store.event(
+        "claude",
+        event={
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "w1",
+                        "is_error": True,
+                        "content": "PreToolUse:Write hook error: [guard]: Outside scratch directory",
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(RunStore, "observed", lambda self, config: self.load())
+    monkeypatch.setattr(cli, "CHAT_WATCH_SECONDS", 0)
+    result = runner.invoke(app, ["watch", store.id, "--chat", "--after", str(after)])
+    assert result.exit_code == 0, result.output
+    assert "refused by the guard: Outside scratch directory" in result.stdout
+    assert "Editing" not in result.stdout
