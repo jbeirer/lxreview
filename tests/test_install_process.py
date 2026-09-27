@@ -1,6 +1,7 @@
 import json
 import subprocess
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -303,6 +304,91 @@ def test_supervisor_preserves_launch_environment_and_uses_distinct_tmux_servers(
     )
     assert state["environment"]["SSH_AUTH_SOCK"] == "/safe/agent.sock"
     assert "supervised-exec" in str(calls)
+    # Sockets and temporary files stay node-local: AFS homes cannot hold unix sockets.
+    assert supervisor.tmux_socket("browser").parent == paths.local
+    assert state["environment"]["TMPDIR"] == str(paths.local)
+    assert paths.local.is_dir()
+
+
+def test_runtime_directory_is_node_local_when_the_host_provides_one(paths, tmp_path, monkeypatch):
+    import os
+
+    assert paths.local == paths.root / "run"
+    (tmp_path / "run-user" / str(os.getuid())).mkdir(parents=True)
+    monkeypatch.setattr("lxreview.paths.RUN_USER", tmp_path / "run-user")
+    assert paths.local == tmp_path / f"run-user/{os.getuid()}/lxreview-{paths.key}"
+
+
+def test_update_keeps_only_the_current_and_previous_environments(paths):
+    from lxreview.install.updater import prune
+
+    def launcher(venv):
+        (venv / "bin").mkdir(parents=True)
+        (venv / "bin/python").write_text("")
+        return f"#!{venv}/bin/python\nmain()\n"
+
+    releases = paths.root / "runtime/releases"
+    launcher(paths.root / "runtime/venv")
+    launcher(releases / "a/venv")
+    previous = launcher(releases / "b/venv")
+    current = launcher(releases / "c/venv")
+    (releases / "failed").mkdir()
+    write_json(
+        paths.root / "state/application-versions.json",
+        {"current": current, "previous": previous},
+    )
+    prune(paths)
+    assert sorted(p.name for p in releases.iterdir()) == ["b", "c"]
+    assert not (paths.root / "runtime/venv").exists()
+
+
+@pytest.mark.parametrize(
+    ("listing", "refused"),
+    [
+        ("User's (AFS ID 1) rxkad tokens for cern.ch [Expires {when}]\n   --End of list--", False),
+        ("User's (AFS ID 1) rxkad tokens for cern.ch [>> Expired <<]\n", True),
+        ("   --End of list--\n", True),
+    ],
+)
+def test_runs_need_an_afs_token_that_outlasts_the_loop(paths, monkeypatch, listing, refused):
+    from datetime import datetime, timedelta
+
+    from lxreview.process import afs_token, require_afs_token
+
+    later = datetime.now() + timedelta(hours=5)
+    # tokens prints ctime's space-padded day, e.g. "Sep  8 01:39".
+    text = listing.format(when=later.strftime("%b ") + f"{later.day:2} " + later.strftime("%H:%M"))
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "lxreview.process.run",
+        lambda argv, *a, **k: subprocess.CompletedProcess(argv, 0, text, ""),
+    )
+    home = Path("/afs/cern.ch/user/j/jdoe/.lxreview")
+    # Only locations on AFS are checked.
+    assert afs_token(paths.root, paths) is None
+    require_afs_token(paths, paths.root)
+    if refused:
+        with pytest.raises(LXError, match="kinit and aklog"):
+            require_afs_token(paths, paths.root, home)
+    else:
+        assert afs_token(home, paths) == ("cern.ch", later.replace(second=0, microsecond=0))
+        require_afs_token(paths, home)
+
+
+def test_runs_refuse_an_afs_token_that_expires_mid_loop(paths, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from lxreview.process import require_afs_token
+
+    soon = datetime.now() + timedelta(minutes=30)
+    text = f"User's (AFS ID 1) rxkad tokens for cern.ch [Expires {soon:%b %d %H:%M}]"
+    monkeypatch.setattr("lxreview.process.binary", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(
+        "lxreview.process.run",
+        lambda argv, *a, **k: subprocess.CompletedProcess(argv, 0, text, ""),
+    )
+    with pytest.raises(LXError, match=f"expires at {soon:%H:%M}"):
+        require_afs_token(paths, Path("/afs/cern.ch/user/j/jdoe/repo"))
 
 
 def test_supervisor_uses_recorded_kind_after_config_changes(paths, monkeypatch):

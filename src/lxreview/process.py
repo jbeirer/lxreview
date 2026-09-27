@@ -1,6 +1,5 @@
 """Explicit environments and package-owned user service supervision."""
 
-import hashlib
 import json
 import os
 import platform
@@ -9,12 +8,13 @@ import secrets
 import shutil
 import socket
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from .config import Config
 from .errors import Category, LXError
-from .paths import Paths, lock, write_json
+from .paths import Paths, lock, private_dir, write_json
 
 
 def environment(paths: Paths, *, desktop: bool = False) -> dict[str, str]:
@@ -24,7 +24,8 @@ def environment(paths: Paths, *, desktop: bool = False) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "LXREVIEW_HOME": str(paths.root),
-        "TMPDIR": str(paths.root / "cache"),
+        # Chrome, ssh and Claude place sockets in TMPDIR, so it must be node-local.
+        "TMPDIR": str(private_dir(paths.local)),
     }
     for key in (
         "XDG_RUNTIME_DIR",
@@ -94,6 +95,50 @@ def run(
     return result
 
 
+# A review loop must finish before AFS stops serving the installation or the repository.
+AFS_MINIMUM = timedelta(hours=2)
+
+
+def afs_token(location: Path, paths: Paths) -> tuple[str, datetime | None] | None:
+    """The AFS cell holding location and its token's expiry (None: no valid token).
+
+    Returns None when location is not on AFS or the host has no tokens command.
+    """
+    parts = location.resolve().parts
+    if len(parts) < 3 or parts[1] != "afs":
+        return None
+    cell = parts[2].lstrip(".")
+    try:
+        listing = run([binary("tokens")], paths, check=False).stdout
+    except LXError:
+        return None
+    match = re.search(rf"tokens for {re.escape(cell)} \[Expires (\w+ +\d+ \d+:\d+)\]", listing)
+    if not match:
+        return cell, None
+    now = datetime.now()
+    expiry = datetime.strptime(f"{now.year} {' '.join(match[1].split())}", "%Y %b %d %H:%M")
+    # tokens omits the year, so a date well in the past lies after New Year.
+    if expiry < now - timedelta(days=30):
+        expiry = expiry.replace(year=now.year + 1)
+    return cell, expiry
+
+
+def require_afs_token(paths: Paths, *locations: Path) -> None:
+    """Refuse to start a loop whose files AFS would stop serving before it can finish."""
+    for location in locations:
+        found = afs_token(location, paths)
+        if found is None:
+            continue
+        cell, expiry = found
+        if expiry is None or expiry - datetime.now() < AFS_MINIMUM:
+            state = f"expires at {expiry:%H:%M}" if expiry else "is missing"
+            raise LXError(
+                Category.UNAVAILABLE,
+                f"The AFS token for {cell} {state}; a review loop needs at least two more "
+                "hours. Renew it with kinit and aklog, then retry.",
+            )
+
+
 class Supervisor:
     def __init__(self, paths: Paths, config: Config):
         self.paths, self.config = paths, config
@@ -101,7 +146,7 @@ class Supervisor:
     def unit(self, name: str) -> str:
         if not re.fullmatch(r"[a-zA-Z0-9-]+", name):
             raise LXError(Category.UNSAFE, "Invalid service name")
-        return f"lxreview-{hashlib.sha256(str(self.paths.root).encode()).hexdigest()[:8]}-{name}"
+        return f"lxreview-{self.paths.key}-{name}"
 
     def status(self, name: str) -> bool:
         unit = self.unit(name)
@@ -216,8 +261,7 @@ class Supervisor:
         run(cmd, self.paths)
 
     def tmux_socket(self, name: str) -> Path:
-        key = hashlib.sha256(self.unit(name).encode()).hexdigest()[:12]
-        return self.paths.root / f"state/services/{key}.sock"
+        return self.paths.local / f"{self.unit(name)}.tmux"
 
     def stop(self, name: str) -> None:
         with lock(self.paths.root / f"state/services/{self.unit(name)}.lock"):
@@ -272,6 +316,8 @@ class Supervisor:
         if state["host"] != socket.getfqdn():
             raise LXError(Category.UNAVAILABLE, "Supervisor state belongs to another host")
         os.umask(0o077)
+        # The runtime directory disappears when the node reboots or the user logs out.
+        private_dir(self.paths.local)
         os.chdir(state["cwd"])
         os.execve(state["argv"][0], state["argv"], state["environment"])
 

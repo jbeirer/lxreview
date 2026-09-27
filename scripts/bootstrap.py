@@ -167,6 +167,8 @@ def main():
         env=env,
         check=True,
     )
+    # The environment holds its own copies; AFS homes cannot hardlink into a cache.
+    shutil.rmtree(root / "cache/uv", ignore_errors=True)
     bindir = root / "bin"
     bindir.mkdir(exist_ok=True, mode=0o700)
     launcher = bindir / "lxreview"

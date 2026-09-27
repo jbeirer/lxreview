@@ -21,7 +21,7 @@ from . import __version__, discussion
 from .config import Config, executable
 from .errors import Category, LXError
 from .paths import Paths, atomic_write, lock, write_json
-from .process import Supervisor, binary
+from .process import Supervisor, binary, require_afs_token
 from .runs import TERMINAL, RunStore
 
 app = typer.Typer(
@@ -355,6 +355,7 @@ def start_run(
         if config.role != "host":
             raise LXError(Category.CONFIG, "Start review workers on the repository host")
         executable(config.runtime.claude)
+        require_afs_token(paths, paths.root, repo)
         identity = repository.preflight(target, settle=30)
         # Every pass reads the PR discussion; refuse now rather than after the first review.
         discussion.fetch(target, paths, config)
@@ -418,6 +419,7 @@ def resume(run_id: str):
             raise LXError(Category.UNSAFE, "Only failed, cancelled or interrupted runs can resume")
         if Supervisor(paths, config).status("run-" + run_id):
             raise LXError(Category.BUSY, "Worker is still active")
+        require_afs_token(paths, paths.root, Path(state["repo"]))
         repo = Repository(Path(state["repo"]), paths)
         repo.verify_identity(state["identity"])
         repo.preflight(state["target"])
@@ -1016,6 +1018,7 @@ def uninstall(yes: bool = False):
         remove_integration(paths, config)
         if paths.link.is_symlink() and Path(os.readlink(paths.link)) == paths.executable:
             paths.link.unlink()
+        shutil.rmtree(paths.local, ignore_errors=True)
         destination = paths.root.with_name(paths.root.name + ".uninstalled-" + secrets.token_hex(4))
         paths.root.rename(destination)
         output(

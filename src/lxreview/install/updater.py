@@ -75,6 +75,7 @@ def application_update(paths: Paths, source: Path) -> None:
         env=env,
         timeout=600,
     )
+    shutil.rmtree(paths.root / "cache/uv", ignore_errors=True)
     python = release / "venv/bin/python"
     run([str(python), "-m", "lxreview.cli", "version"], paths, timeout=30)
     launcher = f"#!{python}\nimport os\nos.environ['LXREVIEW_HOME'] = {str(paths.root)!r}\nfrom lxreview.cli import main\nmain()\n"
@@ -83,6 +84,20 @@ def application_update(paths: Paths, source: Path) -> None:
         {"version": version, "current": launcher, "previous": old, "release": str(release)},
     )
     atomic_write(paths.executable, launcher, 0o700)
+    prune(paths)
+
+
+def prune(paths: Paths) -> None:
+    """Delete application environments that neither the current nor the previous launcher uses."""
+    state = json.loads((paths.root / "state/application-versions.json").read_text())
+    used = [Path(state[key].splitlines()[0].removeprefix("#!")) for key in ("current", "previous")]
+    releases = paths.root / "runtime/releases"
+    for candidate in [
+        paths.root / "runtime/venv",
+        *(releases.iterdir() if releases.is_dir() else []),
+    ]:
+        if candidate.is_dir() and not any(python.is_relative_to(candidate) for python in used):
+            shutil.rmtree(candidate)
 
 
 def application_rollback(paths: Paths) -> None:

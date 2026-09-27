@@ -1,7 +1,7 @@
 """The browser service: owns Chrome and serves the named reviewer operations locally.
 
-Clients reach it through a unix socket inside the private state directory, so neither a
-TCP port nor Chrome's debugging protocol is exposed to other users of a shared host.
+Clients reach it through a unix socket in the node-local private runtime directory, so
+neither a TCP port nor Chrome's debugging protocol is exposed to other users of a shared host.
 """
 
 import asyncio
@@ -50,7 +50,7 @@ async def serve(paths: Paths, config: Config, metadata: dict, session=None) -> N
     from ..bridge.relay import application
 
     state = private_dir(directory(paths))
-    socket_path = state / "api.sock"
+    socket_path = private_dir(paths.local) / "browser.sock"
     # sockaddr_un holds about 104 bytes on macOS and 108 on Linux.
     if len(str(socket_path).encode()) > 100:
         raise LXError(Category.CONFIG, "Installation path is too long for the browser socket")
@@ -95,7 +95,7 @@ class ServiceSession:
         timeout = float(data.get("timeout", 0)) + DEADLINES.get(op, 15)
         try:
             async with httpx.AsyncClient(
-                transport=httpx.AsyncHTTPTransport(uds=str(state / "api.sock")),
+                transport=httpx.AsyncHTTPTransport(uds=str(self.paths.local / "browser.sock")),
                 base_url="http://lxreview",
                 trust_env=False,
                 timeout=httpx.Timeout(timeout, connect=3),

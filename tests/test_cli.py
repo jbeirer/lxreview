@@ -416,9 +416,10 @@ def test_uninstall_removes_only_its_own_command_link(paths, tmp_path, monkeypatc
     monkeypatch.setenv("PATH", str(paths.link.parent))
     # A launcher found on PATH is shown as the bare command.
     assert cli._launcher(paths) == "lxreview"
+    paths.local.mkdir()
     result = runner.invoke(app, ["uninstall", "--yes"])
     assert result.exit_code == 0, result.output
-    assert not paths.link.is_symlink()
+    assert not paths.link.is_symlink() and not paths.local.exists()
 
 
 def test_uninstall_keeps_a_command_link_it_does_not_own(paths, tmp_path, monkeypatch):
