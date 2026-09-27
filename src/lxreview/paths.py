@@ -100,11 +100,6 @@ class Paths:
     def executable(self) -> Path:
         return self.root / "bin/lxreview"
 
-    @property
-    def link(self) -> Path:
-        """The command symlink bootstrap places on the user's PATH when that name is free."""
-        return Path.home() / ".local/bin/lxreview"
-
     def ensure(self) -> None:
         if self.root == Path.home() or self.root in Path.home().parents or self.root == Path("/"):
             raise LXError(Category.UNSAFE, "Use a dedicated installation directory")

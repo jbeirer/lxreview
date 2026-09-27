@@ -30,7 +30,7 @@ The loop finishes when no accepted substantial issues remain, with at most one e
 
 - An LXPLUS account and a Git checkout of the project you want reviewed.
 - Claude Code installed and authenticated, plus GitHub CLI (`gh`) authenticated with `gh auth login`.
-- Git, `python3` and `uv` available on the installation host.
+- Git and [uv](https://docs.astral.sh/uv/) available on the installation host.
 - A ChatGPT account that can access the PR, and a workstation with SSH and a VNC viewer for the initial browser login.
 
 The host also needs the desktop and sandbox tools checked by `doctor`; see [host requirements](docs/OPERATIONS.md#lxplus-host-considerations).
@@ -40,16 +40,13 @@ The host also needs the desktop and sandbox tools checked by `doctor`; see [host
 On the LXPLUS host where you will work:
 
 ```bash
-git clone https://github.com/jbeirer/lxreview.git
-cd lxreview
-python3 scripts/bootstrap.py
-export PATH="$HOME/.local/bin:$PATH"
+uv tool install --managed-python lxreview
 lxreview setup --mode lxplus-browser
 lxreview login
 lxreview doctor
 ```
 
-`login` walks you through connecting to the remote desktop and signing into ChatGPT. Installation is private to your account; the PATH command above applies to the current shell.
+To install from a checkout instead, use `uv tool install --managed-python /path/to/lxreview`. uv gives LXReview its own environment on a uv-managed Python and puts the `lxreview` command in `~/.local/bin`; if that directory is not on your PATH, `uv tool update-shell` adds it. `setup` installs the pinned Chrome and the Claude Code integration under `~/.lxreview`, and `login` walks you through connecting to the remote desktop and signing into ChatGPT. Installation is private to your account.
 
 To view the browser again later, run `lxreview desktop connect` on the same LXPLUS host. It prints the SSH tunnel and VNC viewer instructions to follow on your workstation; see [reconnecting to the desktop](docs/OPERATIONS.md#reconnect-to-the-desktop).
 

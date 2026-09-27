@@ -7,6 +7,7 @@ import shlex
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ from .config import Config, executable
 from .errors import Category, LXError
 from .paths import Paths, atomic_write, lock, write_json
 from .process import Supervisor, binary, require_afs_token
+from .process import run as run_process
 from .runs import TERMINAL, RunStore
 
 app = typer.Typer(
@@ -88,13 +90,8 @@ def setup(
 
     paths = Paths.default()
     paths.ensure()
-    if not paths.executable.is_file():
-        raise LXError(
-            Category.CONFIG,
-            "Bootstrap the isolated application first: python3 scripts/bootstrap.py --root "
-            + str(paths.root),
-        )
     with lock(paths.root / "state/setup.lock"), lock(paths.root / "state/reviewer.lock"):
+        _write_launcher(paths)
         first_setup = not paths.config.exists()
         config = Config.load(paths) if not first_setup else Config()
         if first_setup and platform.system() == "Darwin":
@@ -168,6 +165,19 @@ def setup(
         doctor(json_output=False, verbose=False, no_smoke=True)
     except typer.Exit:
         output("Setup saved. Complete login/pairing, then rerun lxreview doctor.")
+
+
+def _write_launcher(paths: Paths) -> None:
+    """The fixed entry point that services, Claude hooks, commands and MCP call.
+
+    It runs this installation's interpreter with its root, so upgrading the installed
+    package keeps every registered path valid.
+    """
+    launcher = (
+        f"#!{sys.executable}\nimport os\nos.environ['LXREVIEW_HOME'] = {str(paths.root)!r}\n"
+        "from lxreview.cli import main\nmain()\n"
+    )
+    atomic_write(paths.executable, launcher, 0o700)
 
 
 @app.command()
@@ -653,7 +663,12 @@ def report(run_id: str, output_file: Path | None = typer.Option(None, "--output"
 def _launcher(paths: Paths) -> str:
     """The launcher as users can paste it: bare lxreview when PATH finds this installation."""
     found = shutil.which("lxreview")
-    if found and Path(found).resolve() == paths.executable.resolve():
+    # The installed command runs this interpreter with the default root.
+    if (
+        found
+        and Path(found).resolve().parent == Path(sys.executable).parent
+        and paths.root == Paths(Path.home() / ".lxreview").root
+    ):
         return "lxreview"
     home, path = str(Path.home()), str(paths.executable)
     return "~" + path[len(home) :] if path.startswith(home + "/") else path
@@ -940,75 +955,71 @@ def cleanup(yes: bool = False):
 
 
 @app.command()
-def update(source: Path | None = None, rollback: bool = False):
-    """Verify/reinstall the release's locked runtimes; never follow upstream latest."""
-    from .install.runtime import install_runtimes
-    from .install.updater import application_rollback, application_update, prune
-
+def update(
+    source: Path | None = typer.Option(
+        None, help="Install this LXReview checkout instead of the latest release."
+    ),
+):
+    """Upgrade LXReview with uv, then set it up again and restart its services."""
     paths, config = context()
     with lock(paths.root / "state/setup.lock"), lock(paths.root / "state/reviewer.lock"):
         for file in (paths.root / "state/runs").glob("*/state.json"):
             if json.loads(file.read_text())["status"] not in TERMINAL:
                 raise LXError(Category.BUSY, "Stop active runs before updating")
-        if source and rollback:
-            raise LXError(Category.CONFIG, "Choose --source or --rollback")
-        if rollback:
-            application_rollback(paths)
-            output("Previous application launcher restored. Run doctor.")
-            return
-        if not source:
-            _stop(paths, config)
-            if config.mode == "local-browser" and config.role == "host":
-                raise LXError(Category.CONFIG, "Browser runtimes belong on the paired workstation")
-            install_runtimes(paths, config)
-            output(
-                "Pinned runtimes verified. Use update --source /path/to/reviewed/checkout for an application upgrade."
+        uv = shutil.which("uv")
+        env = _uv_environment(paths)
+        tools = run_process([uv, "tool", "dir"], paths, env=env).stdout.strip() if uv else ""
+        if not uv or not Path(sys.prefix).is_relative_to(tools):
+            raise LXError(
+                Category.CONFIG,
+                "LXReview was not installed with uv tool install; upgrade it the way it was "
+                f"installed, then run lxreview setup --mode {config.mode}",
             )
-            return
-        application_update(paths, source)
-        restarted = _restart_long_running(paths, config)
-        # Services may have run a release outside current/previous (after a rollback).
-        prune(paths)
-    # The new release owns the Claude command texts; its launcher rewrites them once the
-    # setup lock is free.
-    if config.role == "host":
-        from .process import run as run_process
-
-        run_process([str(paths.executable), "integrate"], paths, timeout=60)
+        supervisor = Supervisor(paths, config)
+        running = [name for name in ("browser", "bridge") if supervisor.status(name)]
+        # Services must not keep running code whose files the upgrade replaces.
+        _stop(paths, config)
+        command = (
+            [uv, "tool", "install", "--reinstall", "--managed-python", str(source.resolve())]
+            if source
+            else [uv, "tool", "upgrade", "lxreview"]
+        )
+        run_process(command, paths, env=env, timeout=600)
+    # From here on only the new code runs: it checks the pinned runtimes, rewrites the
+    # launcher and the Claude integration, and restarts what was running.
+    # These are the user's own commands, so they get the user's environment (setup
+    # locates Claude Code on PATH, as when the user runs it).
+    launcher = str(paths.executable)
+    for step in (["setup", "--mode", config.mode], ["start"] if "browser" in running else []):
+        if step and subprocess.run([launcher, *step]).returncode:
+            raise LXError(
+                Category.UNAVAILABLE,
+                f"The new version is installed, but lxreview {' '.join(step)} failed; rerun it",
+            )
+    if "bridge" in running:
+        Supervisor(paths, config).start("bridge", [launcher, "bridge-worker"])
     output(
-        "Application updated atomically. Run doctor; update --rollback restores the prior launcher."
-        + (f" Restarted on the new version: {', '.join(restarted)}." if restarted else "")
+        "LXReview updated."
+        + (f" Restarted: {', '.join(running)}." if running else "")
+        + " Start a new Claude conversation to use the new commands."
     )
 
 
-@app.command(hidden=True)
-def integrate():
-    """Rewrite this release's Claude commands and MCP registration (run by update)."""
-    from .install import claude
+def _uv_environment(paths: Paths) -> dict[str, str]:
+    """The isolated environment plus the settings that tell uv where its tools live."""
+    from .process import environment
 
-    paths, config = context()
-    if config.role != "host":
-        raise LXError(Category.CONFIG, "Claude integration belongs on the repository host")
-    with lock(paths.root / "state/setup.lock"):
-        claude.install(paths, config)
-    output("Claude commands refreshed")
-
-
-def _restart_long_running(paths: Paths, config: Config) -> list[str]:
-    """Services keep running the code they started with; restart them after an update."""
-    from .services import start as launch
-
-    supervisor = Supervisor(paths, config)
-    restarted = []
-    if supervisor.status("browser"):
-        supervisor.stop("browser")
-        launch(paths, config)
-        restarted.append("browser service")
-    if supervisor.status("bridge"):
-        supervisor.stop("bridge")
-        supervisor.start("bridge", [str(paths.executable), "bridge-worker"])
-        restarted.append("bridge")
-    return restarted
+    env = environment(paths)
+    env.update(
+        {
+            key: value
+            for key, value in os.environ.items()
+            if key.startswith("UV_")
+            or key in ("XDG_DATA_HOME", "XDG_BIN_HOME", "XDG_CACHE_HOME", "SSL_CERT_FILE")
+            or key.lower() in ("https_proxy", "http_proxy", "no_proxy")
+        }
+    )
+    return env
 
 
 @app.command()
@@ -1031,13 +1042,11 @@ def uninstall(yes: bool = False):
             )
         _stop(paths, config)
         remove_integration(paths, config)
-        if paths.link.is_symlink() and Path(os.readlink(paths.link)) == paths.executable:
-            paths.link.unlink()
         shutil.rmtree(paths.local, ignore_errors=True)
         destination = paths.root.with_name(paths.root.name + ".uninstalled-" + secrets.token_hex(4))
         paths.root.rename(destination)
         output(
-            f"Uninstalled. Recovery archive (contains private browser state): {destination}\nDelete that archive to remove all package data. Repository audit logs remain under .git/review-loop."
+            f"Uninstalled. Recovery archive (contains private browser state): {destination}\nDelete that archive to remove all package data. Repository audit logs remain under .git/review-loop.\nFinally remove the command itself: uv tool uninstall lxreview"
         )
 
 

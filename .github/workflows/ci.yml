@@ -25,12 +25,12 @@ jobs:
       - run: uv run mypy src
       - run: uv run pytest
       - run: uv build
-      - name: Wheel install smoke
+      - name: Wheel installs as a uv tool
         run: |
-          uv venv /tmp/lxreview-wheel-smoke --python '${{ matrix.python }}'
-          uv pip install --python /tmp/lxreview-wheel-smoke/bin/python dist/*.whl
-          /tmp/lxreview-wheel-smoke/bin/lxreview version
-          /tmp/lxreview-wheel-smoke/bin/lxreview --help
+          export UV_TOOL_DIR=/tmp/lxreview-tools UV_TOOL_BIN_DIR=/tmp/lxreview-tools/bin
+          uv tool install --python '${{ matrix.python }}' dist/*.whl
+          /tmp/lxreview-tools/bin/lxreview version
+          /tmp/lxreview-tools/bin/lxreview --help
   browser:
     # Drives the real Playwright session against a local page that mirrors ChatGPT's markup.
     runs-on: ubuntu-24.04

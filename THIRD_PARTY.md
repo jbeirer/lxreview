@@ -6,7 +6,7 @@ LXReview composes these projects.
 |---|---|---|
 | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 154.0.8037.57 | Google Chrome terms and Chromium third-party notices | Downloaded directly from Google's release bucket |
 | [CPython](https://www.python.org/) | PSF license | uv-managed private runtime |
-| [uv](https://github.com/astral-sh/uv) | MIT / Apache-2.0 | User-provided bootstrap prerequisite |
+| [uv](https://github.com/astral-sh/uv) | MIT / Apache-2.0 | User-provided installer (`uv tool install`) |
 | [Playwright](https://github.com/microsoft/playwright) 1.63.0 | Apache-2.0 (its wheel bundles a Node.js driver under MIT) | Python dependency; drives the pinned Chrome |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | MIT | Python dependency |
 | Typer, Pydantic, HTTPX, Rich, tomli-w | MIT | Python dependencies |

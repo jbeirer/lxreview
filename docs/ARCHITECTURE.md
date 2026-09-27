@@ -78,15 +78,15 @@ Host identity prevents shared-home LXPLUS users from treating another node's ser
 
 | Location | Contents |
 | --- | --- |
-| `~/.lxreview/bin/lxreview` | Absolute package launcher |
-| `~/.local/bin/lxreview` | Bootstrap-created symlink when the name is free |
+| `~/.local/bin/lxreview` | Command installed by `uv tool install` |
+| `~/.lxreview/bin/lxreview` | Fixed launcher written by `setup`: the tool environment's interpreter with this installation root |
 | `~/.lxreview/state/runs/<id>/` | Run state, redacted events, worker output, Claude session ID and cancellation marker |
 | `<git-common-dir>/review-loop/<id>/` | Run metadata, events, summary and per-pass evidence |
 | `<git-common-dir>/review-loop/<id>/pass-NN/` | Verbatim review, explicit evaluations, PR discussion, diff, check reports and metadata |
 
 Using the Git common directory keeps audit evidence out of commits and supports worktrees. Interrupted pass directories are retained with an `-interrupted-*` suffix. Events exclude hidden reasoning and redact credential-shaped values; raw reviews remain verbatim. See [Security](../SECURITY.md) before sharing artifacts.
 
-Claude's user integration registers the MCP server and six slash commands pointing to the absolute launcher. Ownership records allow uninstall to remove only unchanged package-owned entries. Bootstrap and setup leave shell startup files and PATH untouched.
+Claude's user integration registers the MCP server and six slash commands pointing to the fixed launcher, so upgrading the package keeps them valid. Ownership records allow uninstall to remove only unchanged package-owned entries. Setup leaves shell startup files and PATH untouched.
 
 During sandboxed commands, Claude Code creates empty, read-only placeholders for protected paths such as `.bashrc`, `.mcp.json` and `.claude/settings.json`. They disappear after the command, and LXReview excludes them from `git status` during the run. The full filesystem boundary is documented in [Security](../SECURITY.md).
 
@@ -101,6 +101,9 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv build
+uv tool install --managed-python --reinstall .   # use this checkout as the installed lxreview
 ```
+
+Releases are published to PyPI by the `publish` workflow when a tag matching the package version (`v0.1.0`) is pushed. Playwright, mcp and aiohttp are pinned exactly in `pyproject.toml`, because an installed wheel does not use `uv.lock`.
 
 The default test suite does not require a live browser or account login. See [third-party notices](../THIRD_PARTY.md) for runtime dependencies.

@@ -65,7 +65,7 @@ An AFS home can share one installation across LXPLUS nodes, but runs and browser
 
 For `lxplus-browser`, the host needs TigerVNC (`vncserver`, `vncpasswd`), Xfce (`startxfce4`) and `dbus-run-session`, plus the libraries needed by Chrome. Linux workers require the Claude sandbox prerequisites, including `bwrap` and `socat`. Supervision uses systemd user services, or tmux in a systemd scope; workstation macOS uses launchd. `lxreview doctor` checks readiness.
 
-Bootstrap installs private Python dependencies; setup installs Playwright's pinned Chrome runtime under `~/.lxreview`. The command symlink is `~/.local/bin/lxreview`; if it is unavailable or the name is occupied, use `~/.lxreview/bin/lxreview`. Installation does not edit PATH or shell startup files. See [Architecture](ARCHITECTURE.md) for node-local sockets and storage.
+`uv tool install` puts LXReview in its own environment and the `lxreview` command in `~/.local/bin`; `setup` installs Playwright's pinned Chrome runtime under `~/.lxreview` and the fixed launcher `~/.lxreview/bin/lxreview`, which services and the Claude integration call. LXReview does not edit PATH or shell startup files. See [Architecture](ARCHITECTURE.md) for node-local sockets and storage.
 
 ## Browser modes
 
@@ -106,7 +106,7 @@ The password is displayed only in an interactive terminal. Closing the viewer an
 
 ### Local browser
 
-Bootstrap on both the repository host and a Linux/macOS workstation using the [installation commands](../README.md#install-and-log-in), but use the setup commands below in place of the LXPLUS-browser setup and login. Keep the workstation online and awake throughout reviews.
+Install LXReview on both the repository host and a Linux/macOS workstation using the [installation commands](../README.md#install-and-log-in), but use the setup commands below in place of the LXPLUS-browser setup and login. Keep the workstation online and awake throughout reviews.
 
 On the exact LXPLUS host used for your repository:
 
@@ -165,12 +165,11 @@ Stop active reviews before updating.
 | Command | Effect |
 | --- | --- |
 | `lxreview version` | Show application and pinned runtime versions |
-| `lxreview update` | Verify/reinstall the current release's pinned runtimes |
-| `lxreview update --source /path/to/reviewed/checkout` | Upgrade the application from a reviewed checkout |
-| `lxreview update --rollback` | Restore the previous application launcher |
+| `lxreview update` | Upgrade to the latest release, then set up again and restart running services |
+| `lxreview update --source /path/to/lxreview` | Install a checkout instead of the latest release |
 | `lxreview cleanup` | List retained runtime versions and downloads, then confirm removal |
 
-An application upgrade builds a frozen private release and smoke-tests it before switching the launcher atomically. Only current and previous application environments are retained. Runtime updates use the release's pins, not latest upstream versions. In local-browser mode, run the runtime update on the workstation.
+`update` stops LXReview's services, upgrades the package with `uv tool`, then runs the new version's `setup`, which installs the Chrome version the release pins and refreshes the Claude integration, and restarts the services that were running. Start a new Claude conversation afterwards. To return to an earlier release, run `uv tool install --managed-python --reinstall lxreview==<version>`, then `lxreview setup`. In local-browser mode, update both the host and the workstation.
 
 ## Uninstalling
 
@@ -178,11 +177,12 @@ Stop active runs, then run:
 
 ```bash
 lxreview uninstall
+uv tool uninstall lxreview
 ```
 
 Uninstall removes only unchanged LXReview-owned Claude entries and command symlinks. It moves the installation root into a private recovery archive and prints its path. Delete that archive when no longer needed to remove browser state and runtimes completely. Repository Git audit logs remain and can be removed separately. Shell configuration and unrelated tools are untouched.
 
-If you deleted the installation directory by hand, rerun `python3 scripts/bootstrap.py` from the checkout. It detects leftovers and prints recovery commands for services still running. Follow those instructions before repeating bootstrap. Subsequent setup reuses matching Claude integration entries so a later uninstall can remove them.
+If you deleted the installation directory by hand, run `lxreview setup` again: it stops services left running by the deleted installation and reuses matching Claude integration entries so a later uninstall can remove them.
 
 ## Troubleshooting
 

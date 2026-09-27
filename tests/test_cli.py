@@ -400,58 +400,122 @@ def test_the_stream_lists_findings_and_colors_a_clean_outcome_green():
     assert style("Finished: NO_VALID_SUBSTANTIAL_FINDINGS") == "bold green"
 
 
-def test_uninstall_removes_only_its_own_command_link(paths, tmp_path, monkeypatch):
+def test_setup_launcher_runs_this_interpreter_with_its_root(paths):
+    import sys
+
+    from lxreview.cli import _write_launcher
+
+    _write_launcher(paths)
+    text = paths.executable.read_text()
+    assert text.splitlines()[0] == f"#!{sys.executable}"
+    assert f"os.environ['LXREVIEW_HOME'] = {str(paths.root)!r}" in text
+    assert paths.executable.stat().st_mode & 0o777 == 0o700
+
+
+def test_pasteable_commands_use_the_bare_name_only_for_this_installation(tmp_path, monkeypatch):
+    import sys
+
+    import lxreview.cli as cli
+    from lxreview.paths import Paths
+
+    # uv tool install puts the command next to the tool environment's interpreter.
+    venv = tmp_path / "tools/lxreview/bin"
+    venv.mkdir(parents=True)
+    (venv / "python").write_text("")
+    (venv / "lxreview").write_text("")
+    (venv / "lxreview").chmod(0o700)
+    bindir = tmp_path / "home/.local/bin"
+    bindir.mkdir(parents=True)
+    (bindir / "lxreview").symlink_to(venv / "lxreview")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setattr(sys, "executable", str(venv / "python"))
+    default = Paths(tmp_path / "home/.lxreview")
+    assert cli._launcher(default) == "lxreview"
+    # Another root, or another installation's command, needs the explicit launcher.
+    other = Paths(tmp_path / "scratch")
+    assert cli._launcher(other) == str(other.executable)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "elsewhere/python"))
+    assert cli._launcher(default) == "~/.lxreview/bin/lxreview"
+
+
+def test_uninstall_clears_the_runtime_directory_and_names_the_package(paths, monkeypatch):
     import lxreview.cli as cli
     import lxreview.install.claude as claude
 
     monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(cli, "_stop", lambda *args: None)
     monkeypatch.setattr(claude, "uninstall", lambda *args: None)
     paths.config.write_text("schema_version = 1\n")
-    paths.executable.write_text("")
-    paths.executable.chmod(0o700)
-    paths.link.parent.mkdir(parents=True)
-    paths.link.symlink_to(paths.executable)
-    monkeypatch.setenv("PATH", str(paths.link.parent))
-    # A launcher found on PATH is shown as the bare command.
-    assert cli._launcher(paths) == "lxreview"
     paths.local.mkdir()
     result = runner.invoke(app, ["uninstall", "--yes"])
     assert result.exit_code == 0, result.output
-    assert not paths.link.is_symlink() and not paths.local.exists()
+    assert not paths.local.exists() and "uv tool uninstall lxreview" in result.output
 
 
-def test_uninstall_keeps_a_command_link_it_does_not_own(paths, tmp_path, monkeypatch):
+@pytest.fixture
+def update_calls(paths, monkeypatch):
+    import subprocess
+    import sys
+    from pathlib import Path
+
     import lxreview.cli as cli
-    import lxreview.install.claude as claude
 
     monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(cli, "_stop", lambda *args: None)
-    monkeypatch.setattr(claude, "uninstall", lambda *args: None)
     paths.config.write_text("schema_version = 1\n")
-    paths.link.parent.mkdir(parents=True)
-    paths.link.symlink_to(tmp_path / "other/bin/lxreview")
-    result = runner.invoke(app, ["uninstall", "--yes"])
+    calls = []
+    tools = {"dir": str(Path(sys.prefix).parent)}
+
+    def run_process(argv, *args, **kwargs):
+        calls.append(argv[1:])
+        return subprocess.CompletedProcess(argv, 0, tools["dir"] + "\n", "")
+
+    class Services:
+        def __init__(self, *args):
+            pass
+
+        def status(self, name):
+            return name == "browser"
+
+        def start(self, name, argv):
+            calls.append(["start " + name])
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name, *a, **k: "/usr/bin/" + name)
+    monkeypatch.setattr(cli, "run_process", run_process)
+    monkeypatch.setattr(cli, "Supervisor", Services)
+    monkeypatch.setattr(cli, "_stop", lambda *args: calls.append(["stop services"]))
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda argv, **k: calls.append(argv[1:]) or subprocess.CompletedProcess(argv, 0),
+    )
+    return calls, tools
+
+
+def test_update_upgrades_with_uv_then_sets_up_and_restarts_with_the_new_code(update_calls):
+    calls, _ = update_calls
+    result = runner.invoke(app, ["update"])
     assert result.exit_code == 0, result.output
-    assert paths.link.is_symlink()
+    assert calls == [
+        ["tool", "dir"],
+        # Stop first: services must not run code whose files the upgrade replaces.
+        ["stop services"],
+        ["tool", "upgrade", "lxreview"],
+        ["setup", "--mode", "lxplus-browser"],
+        ["start"],
+    ]
+    assert "Restarted: browser" in result.output
 
 
-def test_update_prunes_releases_only_after_restarting_services(paths, tmp_path, monkeypatch):
-    import lxreview.cli as cli
-    import lxreview.install.updater as updater
-
-    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
-    paths.config.write_text('schema_version = 1\nrole = "workstation"\n')
-    steps = []
-    monkeypatch.setattr(updater, "application_update", lambda *a: steps.append("switch"))
-    # After a rollback a service may still run a release outside current/previous.
-    monkeypatch.setattr(cli, "_restart_long_running", lambda *a: steps.append("restart") or [])
-    monkeypatch.setattr(updater, "prune", lambda *a: steps.append("prune"))
-    result = runner.invoke(app, ["update", "--source", str(tmp_path)])
-    assert result.exit_code == 0, result.output
-    assert steps == ["switch", "restart", "prune"]
+def test_update_from_a_checkout_and_refusal_outside_uv_tools(update_calls, tmp_path):
+    calls, tools = update_calls
+    assert runner.invoke(app, ["update", "--source", str(tmp_path)]).exit_code == 0
+    assert ["tool", "install", "--reinstall", "--managed-python", str(tmp_path)] in calls
+    calls.clear()
+    tools["dir"] = str(tmp_path / "other-tools")
+    result = runner.invoke(app, ["update"])
+    assert "uv tool install" in str(result.exception)
+    assert calls == [["tool", "dir"]]
 
 
 @pytest.mark.parametrize(

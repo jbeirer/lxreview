@@ -235,20 +235,6 @@ def test_existing_identical_mcp_is_adopted_not_re_added(paths, tmp_path, monkeyp
     ]
 
 
-def test_application_rollback_uses_private_existing_interpreter(paths):
-    from lxreview.install.updater import application_rollback
-
-    python = paths.root / "runtime/old-python"
-    python.write_text("placeholder")
-    previous = f"#!{python}\nprint('old')\n"
-    write_json(
-        paths.root / "state/application-versions.json", {"previous": previous, "current": "new"}
-    )
-    application_rollback(paths)
-    assert paths.executable.read_text() == previous
-    assert paths.executable.stat().st_mode & 0o777 == 0o700
-
-
 def test_launchd_exited_service_is_not_reported_running(paths, monkeypatch):
     import socket
 
@@ -317,29 +303,6 @@ def test_runtime_directory_is_node_local_when_the_host_provides_one(paths, tmp_p
     (tmp_path / "run-user" / str(os.getuid())).mkdir(parents=True)
     monkeypatch.setattr("lxreview.paths.RUN_USER", tmp_path / "run-user")
     assert paths.local == tmp_path / f"run-user/{os.getuid()}/lxreview-{paths.key}"
-
-
-def test_update_keeps_only_the_current_and_previous_environments(paths):
-    from lxreview.install.updater import prune
-
-    def launcher(venv):
-        (venv / "bin").mkdir(parents=True)
-        (venv / "bin/python").write_text("")
-        return f"#!{venv}/bin/python\nmain()\n"
-
-    releases = paths.root / "runtime/releases"
-    launcher(paths.root / "runtime/venv")
-    launcher(releases / "a/venv")
-    previous = launcher(releases / "b/venv")
-    current = launcher(releases / "c/venv")
-    (releases / "failed").mkdir()
-    write_json(
-        paths.root / "state/application-versions.json",
-        {"current": current, "previous": previous},
-    )
-    prune(paths)
-    assert sorted(p.name for p in releases.iterdir()) == ["b", "c"]
-    assert not (paths.root / "runtime/venv").exists()
 
 
 @pytest.mark.parametrize(

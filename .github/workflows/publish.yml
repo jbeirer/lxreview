@@ -1,0 +1,32 @@
+name: publish
+# Publishes a release to PyPI when a version tag such as v0.1.0 is pushed. PyPI trusts this
+# workflow through trusted publishing, so no API token is stored.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.12.19'
+          python-version: '3.12'
+      - name: Tag matches the package version
+        run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run mypy src
+      - run: uv run pytest
+      - run: uv build
+      - name: Wheel installs as a uv tool
+        run: |
+          UV_TOOL_DIR=/tmp/tools UV_TOOL_BIN_DIR=/tmp/tools/bin uv tool install --managed-python dist/*.whl
+          /tmp/tools/bin/lxreview version
+      - run: uv publish --trusted-publishing always
