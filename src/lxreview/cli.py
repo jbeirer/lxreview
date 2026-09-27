@@ -383,13 +383,26 @@ def start_run(
             {
                 "run_id": store.id,
                 "status": "QUEUED",
-                "watch": f"lxreview watch {store.id}",
-                # "default" leaves ChatGPT's current model and Claude Code's own choice.
-                "chatgpt": f"{chosen.reviewer.model}:{chosen.reviewer.reasoning_effort}",
-                "claude": f"{chosen.worker.model}:{chosen.worker.effort}",
+                "watch": f"{_launcher(paths)} watch {store.id}",
+                **_described(chosen),
             },
             True,
         )
+
+
+def _described(config: Config) -> dict[str, str]:
+    """The run's reviewer and worker choices in words, for people rather than parsers."""
+    reviewer, worker = config.reviewer, config.worker
+    chatgpt = "current model" if reviewer.model == "default" else reviewer.model
+    if worker.model == worker.effort == "default":
+        claude = "Claude Code's default model and effort"
+    else:
+        model = "default model" if worker.model == "default" else worker.model
+        claude = f"Claude ({model}), {worker.effort} effort"
+    return {
+        "reviewer": f"ChatGPT ({chatgpt}), {reviewer.reasoning_effort} reasoning",
+        "worker": claude,
+    }
 
 
 @app.command()

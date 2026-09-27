@@ -452,3 +452,26 @@ def test_update_prunes_releases_only_after_restarting_services(paths, tmp_path, 
     result = runner.invoke(app, ["update", "--source", str(tmp_path)])
     assert result.exit_code == 0, result.output
     assert steps == ["switch", "restart", "prune"]
+
+
+@pytest.mark.parametrize(
+    ("choices", "reviewer", "worker"),
+    [
+        ({}, "ChatGPT (current model), medium reasoning", "Claude Code's default model and effort"),
+        (
+            {"reviewer_model": "sol", "reviewer_effort": "high", "worker_model": "opus"},
+            "ChatGPT (sol), high reasoning",
+            "Claude (opus), default effort",
+        ),
+        ({"worker_effort": "xhigh"}, None, "Claude (default model), xhigh effort"),
+    ],
+)
+def test_run_describes_its_choices_in_words(choices, reviewer, worker):
+    from lxreview.cli import _described
+    from lxreview.config import Config
+
+    described = _described(Config().with_choices(choices))
+    assert described["worker"] == worker
+    assert reviewer is None or described["reviewer"] == reviewer
+    # No MODEL:EFFORT codes such as default:default reach the user.
+    assert ":" not in "".join(described.values())

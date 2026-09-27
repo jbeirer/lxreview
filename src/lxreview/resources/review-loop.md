@@ -25,8 +25,24 @@ levels the account offers, if the user asks.
 Invoke the absolute LXReview executable below with `run <quoted-PR-URL> --repo <quoted-repo-path>` plus any choices.
 If it reports an invalid choice, show its message, which lists the valid values. LXReview owns preflight, the independent
 reviewer interface, persistent worker, fixes, tests, commits, pushes, guardrails, and audit state. Do not invoke browser
-providers directly. Return the stable run ID, initial status, and the `chatgpt` and `claude` MODEL:EFFORT from the output ("default" means
-ChatGPT's current model or Claude Code's own choice; the ChatGPT level is always set explicitly; a ChatGPT model or level the account does not offer stops the run at
-its first review, with the valid values). Explain that the run is a background worker, not this conversation: closing
-this chat does not cancel it, and only an explicit stop does. `/review-status`, `/review-show`, `/review-stop`,
-`/review-resume` and `/review-watch` observe and control it from any chat. Then follow it here as described below.
+providers directly.
+
+When the run has started, tell the user exactly this, filled in from the output, and nothing more:
+
+Started review run `<run_id>` for <PR URL>.
+- Reviewer: <reviewer>
+- Worker: <worker>
+
+It runs in the background, so closing this chat does not stop it; `/review-stop <run_id>` does.
+To follow every step in full in a terminal (reviews, each finding's decision and reason, commands, tests, commits):
+
+```bash
+<watch>
+```
+
+I'll relay the updates here as they arrive.
+
+Use the `reviewer`, `worker` and `watch` values verbatim; never show the `status` field or MODEL:EFFORT codes. A ChatGPT
+model or level the account does not offer stops the run at its first review with the valid values: relay that message.
+`/review-status`, `/review-show`, `/review-resume` and `/review-watch` also observe and control the run from any chat on
+this host; mention them only if the user asks. Then follow it here as described below.
