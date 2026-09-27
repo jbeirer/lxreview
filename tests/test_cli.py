@@ -348,7 +348,7 @@ def test_options_are_read_live_and_fall_back_to_the_last_check_while_busy(paths,
     monkeypatch.setattr(backend, "browser", lambda paths, config: Browser())
     live = json.loads(runner.invoke(app, ["options", "--json"]).stdout)
     assert live["reviewer"]["live"] is True and live["reviewer"]["models"] == ["GPT-5.5"]
-    assert live["reviewer"]["configured"] == {"model": "default", "reasoning_effort": "highest"}
+    assert live["reviewer"]["configured"] == {"model": "default", "reasoning_effort": "medium"}
     assert "xhigh" in live["worker"]["efforts"] and "opus" in live["worker"]["models"]
     # A run's review owns the browser: report the last check instead of navigating away.
     with lock(paths.root / "state/reviewer.lock"):

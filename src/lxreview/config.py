@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .contracts import EFFORT_NAME, MODEL_NAME
 from .errors import Category, LXError
@@ -22,9 +22,18 @@ class ReviewerConfig(Strict):
     provider: Literal["chatgpt"] = "chatgpt"
     # As ChatGPT's model picker names them: a model such as "GPT-5.6 Sol" (or a unique part
     # of its name, "sol") and a level your plan offers, such as instant, medium or high.
-    # "highest" is the top level offered; "default" keeps ChatGPT's current choice.
+    # "highest" is the top level offered; model "default" keeps ChatGPT's current model.
     model: str = Field(default="default", pattern=MODEL_NAME)
-    reasoning_effort: str = Field(default="highest", pattern=EFFORT_NAME)
+    reasoning_effort: str = Field(default="medium", pattern=EFFORT_NAME)
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def explicit_level(cls, value: str) -> str:
+        # ChatGPT keeps the last level on the account, so leaving it untouched would
+        # inherit whatever an earlier run or the user last chose.
+        if value == "default":
+            raise ValueError("choose a reasoning level; ChatGPT would keep the last one used")
+        return value
 
 
 class WorkerConfig(Strict):
@@ -127,14 +136,22 @@ class Config(Strict):
             ):
                 raise LXError(Category.CONFIG, "Browser placement conflicts with mode")
             return config
-        except (OSError, ValueError, ValidationError) as exc:
+        except ValidationError as exc:
+            error = exc.errors()[0]
+            where = ".".join(str(part) for part in error["loc"])
+            raise LXError(
+                Category.CONFIG, f"Invalid setting {where} in {paths.config}: {error['msg']}"
+            ) from exc
+        except (OSError, ValueError) as exc:
             raise LXError(
                 Category.CONFIG,
                 "Invalid or missing config; run lxreview setup (unknown keys are rejected)",
             ) from exc
 
     def save(self, paths: Paths) -> None:
-        atomic_write(paths.config, tomli_w.dumps(self.model_dump()))
+        # Only deliberate settings: a saved default would pin it when a later release changes it.
+        data = {"schema_version": self.schema_version, **self.model_dump(exclude_defaults=True)}
+        atomic_write(paths.config, tomli_w.dumps(data))
 
 
 def executable(path: str) -> Path:

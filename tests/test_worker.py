@@ -7,6 +7,7 @@ from conftest import DISCUSSION
 
 from lxreview.config import Config
 from lxreview.contracts import parse_response
+from lxreview.errors import LXError
 from lxreview.runs import RunStore
 from lxreview.worker import Decision, EditResult, Evaluation, PublishResult, execute
 
@@ -393,10 +394,30 @@ async def test_run_choices_reach_the_reviewer_and_claude(paths, tmp_path, monkey
     assert efforts == ["max"]
 
 
-def test_the_reviewer_thinks_hardest_by_default():
+def test_the_reviewer_sets_medium_reasoning_by_default():
     config = Config()
-    assert config.reviewer.reasoning_effort == "highest" and config.reviewer.model == "default"
+    assert config.reviewer.reasoning_effort == "medium" and config.reviewer.model == "default"
     assert (config.worker.model, config.worker.effort) == ("default", "default")
+
+
+def test_the_reviewer_level_is_always_chosen_explicitly(paths):
+    # ChatGPT keeps the last level on the account; "leave it" would inherit an earlier run's.
+    with pytest.raises(LXError, match="Invalid model or effort choice"):
+        Config().with_choices({"reviewer_effort": "default"})
+    paths.config.write_text('schema_version = 1\n[reviewer]\nreasoning_effort = "default"\n')
+    with pytest.raises(LXError, match="reviewer.reasoning_effort"):
+        Config.load(paths)
+
+
+def test_saved_config_holds_only_deliberate_settings(paths):
+    # A saved default would pin it when a later release changes the default.
+    config = Config()
+    config.reviewer.reasoning_effort = "high"
+    config.save(paths)
+    assert (
+        paths.config.read_text() == 'schema_version = 1\n\n[reviewer]\nreasoning_effort = "high"\n'
+    )
+    assert Config.load(paths) == config
 
 
 def fixing_turn(decide, prompts):
