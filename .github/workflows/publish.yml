@@ -1,6 +1,7 @@
 name: publish
 # Publishes a release to PyPI when a version tag such as v0.1.0 is pushed, after the full CI
-# suite (every platform and Python version, plus the browser fixture job) passes on that tag.
+# suite (every platform and Python version, plus the browser fixture job) passes on that tag,
+# then creates the matching GitHub release.
 # PyPI trusts this workflow through trusted publishing, so no API token is stored.
 on:
   push:
@@ -29,6 +30,7 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
@@ -41,3 +43,7 @@ jobs:
           UV_TOOL_DIR=/tmp/tools UV_TOOL_BIN_DIR=/tmp/tools/bin uv tool install --managed-python dist/*.whl
           /tmp/tools/bin/lxreview version
       - run: uv publish --trusted-publishing always
+      - name: GitHub release with generated notes and the published files
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
