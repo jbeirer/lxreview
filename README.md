@@ -29,25 +29,33 @@ The loop finishes when no accepted substantial issues remain, with at most one e
 ### Prerequisites
 
 - An LXPLUS account and a Git checkout of the project you want reviewed.
-- Claude Code installed and authenticated, plus GitHub CLI (`gh`) authenticated with `gh auth login`.
-- Git and [uv](https://docs.astral.sh/uv/) on the installation host. LXPLUS does not provide uv; the first install step below installs it.
+- GitHub CLI (`gh`) authenticated with `gh auth login`.
 - A ChatGPT account that can access the PR, and a workstation with SSH and a VNC viewer for the initial browser login.
+- About 700 MB free in your home directory for the Python environment and the pinned Chrome. Check with `fs listquota ~`.
 
 The host also needs the desktop and sandbox tools checked by `doctor`; see [host requirements](docs/OPERATIONS.md#lxplus-host-considerations).
+
+LXPLUS provides neither [uv](https://docs.astral.sh/uv/) nor [Claude Code](https://docs.anthropic.com/en/docs/claude-code). If you do not have them yet, install both into `~/.local/bin`, then start `claude` once to sign in:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -fsSL https://claude.ai/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.bashrc to keep it in new shells
+claude
+```
 
 ### Install and log in
 
 On the LXPLUS host where you will work:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH="$HOME/.local/bin:$PATH"   # installs uv; skip if you have it
-uv tool install --managed-python lxreview
+uv tool install --managed-python --no-cache --link-mode=copy lxreview
 lxreview setup --mode lxplus-browser
 lxreview login
 lxreview doctor
 ```
 
-To install from a checkout instead, use `uv tool install --managed-python /path/to/lxreview`. uv gives LXReview its own environment on a uv-managed Python and puts the `lxreview` command in `~/.local/bin`; if that directory is not on your PATH, `uv tool update-shell` adds it. `setup` installs the pinned Chrome and the Claude Code integration under `~/.lxreview`, and `login` walks you through connecting to the remote desktop and signing into ChatGPT. Installation is private to your account.
+`--no-cache` keeps uv's download cache out of your AFS home, and `--link-mode=copy` avoids a hard-link warning, since AFS cannot hard-link files between directories. To install from a checkout instead, use `uv tool install --managed-python --no-cache --link-mode=copy /path/to/lxreview`. uv gives LXReview its own environment on a uv-managed Python and puts the `lxreview` command in `~/.local/bin`; if that directory is not on your PATH, `uv tool update-shell` adds it. `setup` installs the pinned Chrome and the Claude Code integration under `~/.lxreview`, and `login` walks you through connecting to the remote desktop and signing into ChatGPT. Installation is private to your account.
 
 To view the browser again later, run `lxreview desktop connect` on the same LXPLUS host. It prints the SSH tunnel and VNC viewer instructions to follow on your workstation; see [reconnecting to the desktop](docs/OPERATIONS.md#reconnect-to-the-desktop).
 
