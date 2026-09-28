@@ -34,7 +34,9 @@ Resume accepts only `FAILED`, `CANCELLED` or `INTERRUPTED` runs. Use the origina
 
 Before each review, local HEAD, the upstream branch and the PR or MR head on GitHub or GitLab must agree. LXReview waits briefly for the forge to update its PR or MR ref after a push. Fork PRs and MRs are supported, including a fork's main branch; the target is the head branch, not the base repository's main branch.
 
-GitLab merge requests are supported on gitlab.com and gitlab.cern.ch, in public projects only: ChatGPT and LXReview both read them without signing in, and `run` refuses an MR that is not visible anonymously. The upstream remote must be on the same GitLab host, over HTTPS (including CERN's Kerberos form `https://:@gitlab.cern.ch:8443/...`) or SSH (`ssh://git@gitlab.cern.ch:7999/...`); pushes use your normal Git credentials.
+Only public repositories can be reviewed, on GitHub as on GitLab: ChatGPT and LXReview both read the PR or MR without signing in, and `run` refuses one that is not visible anonymously.
+
+GitLab merge requests are supported on gitlab.com and gitlab.cern.ch. The upstream remote must be on the same GitLab host, over HTTPS (including CERN's Kerberos form `https://:@gitlab.cern.ch:8443/...`) or SSH (`ssh://git@gitlab.cern.ch:7999/...`); pushes use your normal Git credentials.
 
 Every pass opens a fresh Temporary Chat in the same managed browser tab. Previous review findings are never sent to ChatGPT; ChatGPT memory and history do not supply context, and these review chats do not appear in chat history.
 
@@ -195,7 +197,7 @@ If you deleted the installation directory by hand, run `lxreview setup` again: i
 | Want diagnostics without a ChatGPT turn | Use `lxreview doctor --no-smoke`; the default performs a real assistant-turn smoke test |
 | Slash commands or MCP unavailable after setup | Open a fresh Claude Code conversation |
 | PR cannot be read | Check `gh auth status`, browser access to the PR and branch/upstream agreement |
-| MR cannot be read | Check that the GitLab project and its merge requests are public (open the MR in a private browser window) and that the upstream remote is on the same GitLab host |
+| "cannot be read without signing in" | The repository must be public; open the PR or MR in a private browser window to check. For GitLab, the upstream remote must also be on the same GitLab host |
 | Run or services belong to another host | Reconnect to the exact node listed in run/service status |
 | Resume refuses a dirty or unpushed checkout | Inspect the retained changes, resolve them and establish a clean, pushed checkpoint |
 | Workstation connection expired | Repeat host/workstation pairing and keep the workstation awake |

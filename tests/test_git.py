@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from lxreview.errors import LXError
+from lxreview.errors import Category, LXError
 from lxreview.git import Repository
 from lxreview.security import allowed
 
@@ -131,7 +131,7 @@ def test_preflight_compares_actual_head_with_both_remote_refs(repo, monkeypatch)
     probes = []
 
     def call(*args, **kwargs):
-        if args[0] == "ls-remote":
+        if "ls-remote" in args:
             probes.append(args)
             return head + "\t" + args[-1]
         return original(*args)
@@ -139,7 +139,13 @@ def test_preflight_compares_actual_head_with_both_remote_refs(repo, monkeypatch)
     monkeypatch.setattr(repository, "call", call)
     assert repository.preflight("https://github.com/org/repo/pull/12")["head"] == head
     assert probes == [
-        ("ls-remote", "https://github.com/org/repo.git", "refs/pull/12/head"),
+        (
+            "-c",
+            "credential.helper=",
+            "ls-remote",
+            "https://github.com/org/repo.git",
+            "refs/pull/12/head",
+        ),
         ("ls-remote", "origin", "refs/heads/feature"),
     ]
     (repository.path / "unrelated.txt").write_text("uncommitted")
@@ -164,7 +170,7 @@ def test_preflight_reads_the_merge_request_ref_of_the_target_project(repo, monke
     probes = []
 
     def call(*args, **kwargs):
-        if args[0] == "ls-remote":
+        if "ls-remote" in args:
             env = kwargs.get("env") or {}
             probes.append((args, (env.get("GIT_TERMINAL_PROMPT"), env.get("GIT_ASKPASS"))))
             return head + "\t" + args[-1]
@@ -175,11 +181,42 @@ def test_preflight_reads_the_merge_request_ref_of_the_target_project(repo, monke
     assert repository.preflight(target)["head"] == head
     assert probes == [
         (
-            ("ls-remote", "https://gitlab.cern.ch/g/sub/p.git", "refs/merge-requests/12/head"),
+            (
+                "-c",
+                "credential.helper=",
+                "ls-remote",
+                "https://gitlab.cern.ch/g/sub/p.git",
+                "refs/merge-requests/12/head",
+            ),
             ("0", ""),
         ),
         (("ls-remote", "origin", "refs/heads/feature"), (None, None)),
     ]
+
+
+@pytest.mark.parametrize(
+    ("target", "noun"),
+    [
+        ("https://github.com/org/repo/pull/12", "PR"),
+        ("https://gitlab.com/org/repo/-/merge_requests/12", "MR"),
+    ],
+)
+def test_preflight_explains_a_repository_that_needs_a_login(repo, monkeypatch, target, noun):
+    repository, git = repo
+    if "gitlab" in target:
+        git("remote", "set-url", "origin", "https://gitlab.com/org/repo.git")
+    original = repository.call
+
+    def call(*args, **kwargs):
+        if "ls-remote" in args:
+            raise LXError(Category.UNAVAILABLE, "git failed (exit 128); run lxreview doctor")
+        return original(*args)
+
+    monkeypatch.setattr(repository, "call", call)
+    with pytest.raises(LXError, match=f"must be public, because ChatGPT reviews the {noun}") as err:
+        repository.preflight(target)
+    assert err.value.category == Category.ACCESS
+    assert "org/repo on " in str(err.value)
 
 
 @pytest.mark.parametrize(
@@ -216,7 +253,7 @@ def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):
     lagging = iter([True, True, False])
 
     def call(*args, **kwargs):
-        if args[0] == "ls-remote":
+        if "ls-remote" in args:
             stale = ("pull" in args[-1] or "merge-requests" in args[-1]) and next(lagging)
             return ("b" * 40 if stale else head) + "\t" + args[-1]
         return original(*args)
@@ -304,9 +341,7 @@ def test_main_branch_is_refused_only_on_the_base_repository(
     monkeypatch.setattr(
         repository,
         "call",
-        lambda *args, **kwargs: (
-            head + "\t" + args[-1] if args[0] == "ls-remote" else original(*args)
-        ),
+        lambda *args, **kwargs: head + "\t" + args[-1] if "ls-remote" in args else original(*args),
     )
     if allowed_main:
         assert repository.preflight(target)["branch"] == "main"

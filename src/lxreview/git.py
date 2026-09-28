@@ -10,6 +10,9 @@ from .forge import parse, remote_project
 from .paths import Paths, atomic_write
 from .process import binary, run
 
+# An empty helper resets every configured credential helper, URL-scoped ones included.
+ANONYMOUS = ("-c", "credential.helper=")
+
 
 class PullRefPending(LXError):
     """Local HEAD is pushed, but the forge's PR/MR head ref still lags behind it."""
@@ -271,14 +274,28 @@ class Repository:
             )
         # Query the target project's PR/MR ref, not a potentially unrelated local upstream.
         head = self.head()
-        advertised = self.call(
-            "ls-remote",
-            forge.clone_url,
-            forge.ref,
-            # A project that needs a login fails here instead of prompting on the terminal;
-            # an empty GIT_ASKPASS also skips core.askPass and SSH_ASKPASS.
-            env={**process.environment(self.paths), "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""},
-        )
+        try:
+            advertised = self.call(
+                # No stored credentials either: ChatGPT reads the project signed out.
+                *ANONYMOUS,
+                "ls-remote",
+                forge.clone_url,
+                forge.ref,
+                # A project that needs a login fails here instead of prompting on the terminal;
+                # an empty GIT_ASKPASS also skips core.askPass and SSH_ASKPASS.
+                env={
+                    **process.environment(self.paths),
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_ASKPASS": "",
+                },
+            )
+        except LXError:
+            raise LXError(
+                Category.ACCESS,
+                f"{forge.project} on {forge.host} cannot be read without signing in. The"
+                f" repository must be public, because ChatGPT reviews the {forge.noun} signed"
+                " out; if it is public, check the network",
+            ) from None
         pushed = self.call("ls-remote", remote, f"refs/heads/{ref}")
         if pushed.startswith(head + "\t") and not advertised.startswith(head + "\t"):
             # GitHub and GitLab update the PR/MR head ref asynchronously after a push.

@@ -147,8 +147,13 @@ class PlaywrightSession:
             # No automation banner or webdriver flag. macOS keeps the login in the real
             # Keychain; Linux keeps Playwright's basic store so no keyring dialog can block
             # Chrome inside the virtual desktop (the profile lives in the private root).
+            # After an unclean stop, no "Restore pages?" bubble covers the reply.
             ignore_default_args=["--enable-automation", "--use-mock-keychain"],
-            args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--start-maximized",
+                "--hide-crash-restore-bubble",
+            ],
             handle_sigint=False,
             handle_sigterm=False,
             handle_sighup=False,

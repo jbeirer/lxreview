@@ -189,6 +189,7 @@ def test_loop_and_watch_commands_follow_the_run_in_the_chat(paths, tmp_path, mon
     assert "watch <quoted-run-id> --chat" in (commands / "review-watch.md").read_text()
     loop = (commands / "review-loop.md").read_text()
     assert "Do not ask the user" in loop and "--chatgpt MODEL[:EFFORT]" in loop
+    assert "output's `message` value, copied exactly" in loop
     assert "Follow the run" not in (commands / "review-status.md").read_text()
 
 

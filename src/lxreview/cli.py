@@ -389,15 +389,32 @@ def start_run(
             except Exception:
                 store.finish("FAILED", "Persistent worker could not start; run doctor")
                 raise
+        described = _described(chosen)
+        watch = f"{_launcher(paths)} watch {store.id}"
         output(
             {
                 "run_id": store.id,
                 "status": "QUEUED",
-                "watch": f"{_launcher(paths)} watch {store.id}",
-                **_described(chosen),
+                "watch": watch,
+                **described,
+                "message": _announcement(store.id, target, described, watch),
             },
             True,
         )
+
+
+def _announcement(run_id: str, target: str, described: dict[str, str], watch: str) -> str:
+    """What /review-loop tells the user once the run starts, ready to relay unchanged."""
+    return (
+        f"Started review run `{run_id}` for {target}.\n"
+        f"- Reviewer: {described['reviewer']}\n"
+        f"- Worker: {described['worker']}\n\n"
+        f"It runs in the background, so closing this chat does not stop it; `/review-stop {run_id}` does.\n"
+        "To follow every step in full in a terminal (reviews, each finding's decision and reason,"
+        " commands, tests, commits):\n\n"
+        f"```bash\n{watch}\n```\n\n"
+        "I'll relay the updates here as they arrive."
+    )
 
 
 def _described(config: Config) -> dict[str, str]:

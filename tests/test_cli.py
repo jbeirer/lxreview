@@ -584,6 +584,24 @@ def test_run_describes_its_choices_in_words(choices, reviewer, worker):
     assert ":" not in "".join(described.values())
 
 
+def test_run_announcement_is_ready_to_relay():
+    from lxreview.cli import _announcement
+
+    described = {
+        "reviewer": "ChatGPT (sol), medium reasoning",
+        "worker": "Claude (opus), xhigh effort",
+    }
+    text = _announcement(
+        "lr-1", "https://github.com/org/repo/pull/1", described, "lxreview watch lr-1"
+    )
+    assert text.startswith("Started review run `lr-1` for https://github.com/org/repo/pull/1.\n")
+    assert (
+        "- Reviewer: ChatGPT (sol), medium reasoning\n- Worker: Claude (opus), xhigh effort" in text
+    )
+    assert "`/review-stop lr-1`" in text
+    assert "```bash\nlxreview watch lr-1\n```" in text
+
+
 def test_chat_watch_continuation_explains_refusal_without_replaying_call(
     paths, tmp_path, monkeypatch
 ):

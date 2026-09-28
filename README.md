@@ -43,7 +43,7 @@ The loop finishes when no accepted substantial issues remain, with at most one e
 ### Prerequisites
 
 - A CERN Linux host (your own VM, or LXPLUS) and a Git checkout of the project you want reviewed.
-- For GitHub PRs, the GitHub CLI (`gh`) authenticated with `gh auth login`. GitLab merge requests on gitlab.com and gitlab.cern.ch need no extra login, but the project must be public: ChatGPT reads the MR without signing in, which it cannot do for internal or private projects.
+- A public repository: ChatGPT reads the PR or MR without signing in, which it cannot do for private or internal projects. GitHub PRs also need the GitHub CLI (`gh`) authenticated with `gh auth login`; GitLab merge requests on gitlab.com and gitlab.cern.ch need no extra login.
 - A ChatGPT account that can access the PR or MR, and a workstation with SSH and a VNC viewer for the initial browser login.
 - About 700 MB free in your home directory for the Python environment and the pinned Chrome (in an AFS home, check with `fs listquota ~`).
 
