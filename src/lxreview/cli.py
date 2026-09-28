@@ -370,13 +370,7 @@ def start_run(
         # Every pass reads the PR discussion; refuse now rather than after the first review.
         discussion.fetch(target, paths, config)
         with lock(repository.audit_root() / "start.lock"):
-            for path in (paths.root / "state/runs").glob("*/state.json"):
-                old = json.loads(path.read_text())
-                if old["repo"] == str(repo.resolve()) and old["status"] not in TERMINAL:
-                    raise LXError(
-                        Category.BUSY,
-                        f"Repository already has run {old['id']}; inspect/stop it first",
-                    )
+            _refuse_while_active(paths, config)
             store = RunStore.create(paths, repo, target, identity, maximum, repository.audit_root())
             if choices:
                 store.update(choices=choices)
@@ -401,6 +395,21 @@ def start_run(
             },
             True,
         )
+
+
+def _refuse_while_active(paths: Paths, config: Config) -> None:
+    """One run at a time per installation and host: every run holds the reviewer for its
+    whole duration, so a second one could only fail. Runs whose worker is gone are marked
+    interrupted here rather than blocking forever."""
+    for path in sorted((paths.root / "state/runs").glob("*/state.json")):
+        state = RunStore(paths, path.parent.name).observed(config)
+        if state["host"] == socket.getfqdn() and state["status"] not in TERMINAL:
+            raise LXError(
+                Category.BUSY,
+                f"Run {state['id']} for {state['target']} is still active, and LXReview"
+                f" reviews one run at a time. Wait for it, or stop it with: lxreview stop"
+                f" {state['id']}",
+            )
 
 
 def _announcement(run_id: str, target: str, described: dict[str, str], watch: str) -> str:
@@ -459,6 +468,7 @@ def resume(run_id: str):
             raise LXError(Category.UNSAFE, "Only failed, cancelled or interrupted runs can resume")
         if Supervisor(paths, config).status("run-" + run_id):
             raise LXError(Category.BUSY, "Worker is still active")
+        _refuse_while_active(paths, config)
         require_afs_token(paths, paths.root, Path(state["repo"]))
         repo = Repository(Path(state["repo"]), paths)
         repo.verify_identity(state["identity"])

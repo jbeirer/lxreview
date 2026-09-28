@@ -1,7 +1,10 @@
 name: quality
 on:
   push:
+    # Release tags run this workflow through publish.yml, which waits for it.
+    branches: ['**']
   pull_request:
+  workflow_call:
 permissions:
   contents: read
 jobs:

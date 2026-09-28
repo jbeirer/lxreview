@@ -120,6 +120,10 @@ Replace `<run-id>` with the ID returned at startup; `lxreview runs` lists IDs an
 
 Resume is for failed, cancelled or interrupted runs and requires a clean, pushed checkpoint. Runs survive ordinary disconnection, subject to host policy, but not node reboot or drain.
 
+### One run at a time
+
+LXReview reviews one run at a time per host, even across repositories: a run keeps the ChatGPT browser for its whole duration, including while Claude evaluates and fixes. While a run is active, `run` and `resume` refuse and name it. Wait for it to finish, or stop it with `lxreview stop <run-id>`. `doctor` also reports the browser as busy until the run ends.
+
 ## Choosing models
 
 Defaults work without configuration. Override model and effort for one run:
@@ -148,10 +152,10 @@ For the alternative mode, run `lxreview setup --mode local-browser --role host` 
 | `lxreview doctor` | Check setup and perform a ChatGPT smoke test |
 | `lxreview runs` | Find runs and their host |
 | `lxreview options` | List model and effort choices |
-| `lxreview update` | Verify/reinstall the current release's pinned runtimes |
+| `lxreview update` | Upgrade LXReview to the latest release, set it up again and restart its services |
 | `lxreview uninstall` | Remove integration and archive the installation |
 
-Run controls are listed above. See [Operations](docs/OPERATIONS.md) for application upgrades, reports and recovery.
+Run controls are listed above. See [Operations](docs/OPERATIONS.md) for upgrade options, reports and recovery.
 
 ## Troubleshooting
 

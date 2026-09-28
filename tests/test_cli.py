@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from lxreview.cli import app
+from lxreview.errors import Category, LXError
 
 runner = CliRunner()
 
@@ -582,6 +583,30 @@ def test_run_describes_its_choices_in_words(choices, reviewer, worker):
     assert reviewer is None or described["reviewer"] == reviewer
     # No MODEL:EFFORT codes such as default:default reach the user.
     assert ":" not in "".join(described.values())
+
+
+def test_one_active_run_at_a_time_across_repositories(paths, tmp_path, monkeypatch):
+    import lxreview.process as process
+    from lxreview.cli import _refuse_while_active
+    from lxreview.config import Config
+    from lxreview.runs import RunStore
+
+    identity = {"head": "a" * 40, "branch": "f", "upstream": "origin/f", "remote_url": "u"}
+    other = tmp_path / "other-repository"
+    store = RunStore.create(
+        paths, other, "https://github.com/org/other/pull/3", identity, 5, tmp_path / "audit"
+    )
+    store.update(status="RUNNING")
+    alive = {"value": True}
+    monkeypatch.setattr(process.Supervisor, "status", lambda self, name: alive["value"])
+    with pytest.raises(LXError, match=f"Run {store.id} for .*/other/pull/3 is still active") as err:
+        _refuse_while_active(paths, Config())
+    assert err.value.category == Category.BUSY
+    assert f"lxreview stop {store.id}" in str(err.value)
+    # A run whose worker is gone no longer blocks; it is marked interrupted instead.
+    alive["value"] = False
+    _refuse_while_active(paths, Config())
+    assert store.load()["status"] == "INTERRUPTED"
 
 
 def test_run_announcement_is_ready_to_relay():
