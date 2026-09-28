@@ -1,6 +1,6 @@
 # LXReview
 
-**Independent AI review loops for Claude Code development on LXPLUS.**
+**Independent AI review loops for Claude Code development on your CERN VM or LXPLUS.**
 
 ChatGPT reviews the actual GitHub PR or GitLab merge request, Claude evaluates and fixes useful findings, and LXReview sends the updated PR through another independent review. The run continues in the background until no accepted substantial issues remain or the pass limit is reached.
 
@@ -22,7 +22,7 @@ For the full detail, run `lxreview watch <run-id>` in any terminal on the same h
 
 ![Following the run with lxreview watch](https://raw.githubusercontent.com/jbeirer/lxreview/main/docs/assets/review-loop-watch.gif)
 
-Meanwhile, in the background, ChatGPT runs in LXReview's own Chrome. Each pass opens a fresh Temporary Chat, sends the review request and waits for the complete answer, which must end with a verdict. You never need to watch this, but you can: run `lxreview desktop connect` on the LXPLUS host and follow the printed SSH tunnel and VNC viewer steps on your workstation (in local-browser mode, the Chrome window is on your workstation already).
+Meanwhile, in the background, ChatGPT runs in LXReview's own Chrome. Each pass opens a fresh Temporary Chat, sends the review request and waits for the complete answer, which must end with a verdict. You never need to watch this, but you can: run `lxreview desktop connect` on the host and follow the printed SSH tunnel and VNC viewer steps on your workstation (in local-browser mode, the Chrome window is on your workstation already).
 
 ![ChatGPT reviewing the PR in the background](https://raw.githubusercontent.com/jbeirer/lxreview/main/docs/assets/review-loop-browser.gif)
 
@@ -42,14 +42,14 @@ The loop finishes when no accepted substantial issues remain, with at most one e
 
 ### Prerequisites
 
-- An LXPLUS account and a Git checkout of the project you want reviewed.
+- A CERN Linux host (your own VM, or LXPLUS) and a Git checkout of the project you want reviewed.
 - For GitHub PRs, the GitHub CLI (`gh`) authenticated with `gh auth login`. GitLab merge requests on gitlab.com and gitlab.cern.ch need no extra login, but the project must be public: ChatGPT reads the MR without signing in, which it cannot do for internal or private projects.
 - A ChatGPT account that can access the PR or MR, and a workstation with SSH and a VNC viewer for the initial browser login.
-- About 700 MB free in your home directory for the Python environment and the pinned Chrome. Check with `fs listquota ~`.
+- About 700 MB free in your home directory for the Python environment and the pinned Chrome (in an AFS home, check with `fs listquota ~`).
 
 The host also needs the desktop and sandbox tools checked by `doctor`; see [host requirements](docs/OPERATIONS.md#lxplus-host-considerations).
 
-LXPLUS provides neither [uv](https://docs.astral.sh/uv/) nor [Claude Code](https://docs.anthropic.com/en/docs/claude-code). If you do not have them yet, install both into `~/.local/bin`, then start `claude` once to sign in:
+If you do not have [uv](https://docs.astral.sh/uv/) and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) yet, install both into `~/.local/bin`, then start `claude` once to sign in:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -60,7 +60,7 @@ claude
 
 ### Install and log in
 
-On the LXPLUS host where you will work:
+Run these on the host where you will work. We recommend your own CERN VM; an LXPLUS node also works:
 
 ```bash
 uv tool install --managed-python --no-cache --link-mode=copy lxreview
@@ -69,9 +69,9 @@ lxreview login
 lxreview doctor
 ```
 
-`--no-cache` keeps uv's download cache out of your AFS home, and `--link-mode=copy` avoids a hard-link warning, since AFS cannot hard-link files between directories. To install from a checkout instead, use `uv tool install --managed-python --no-cache --link-mode=copy /path/to/lxreview`. uv gives LXReview its own environment on a uv-managed Python and puts the `lxreview` command in `~/.local/bin`; if that directory is not on your PATH, `uv tool update-shell` adds it. `setup` installs the pinned Chrome and the Claude Code integration under `~/.lxreview`, and `login` walks you through connecting to the remote desktop and signing into ChatGPT. Installation is private to your account.
+`--no-cache` and `--link-mode=copy` are only needed in an AFS home (small quota, no hard links). To install from a checkout, pass its path instead of `lxreview`. If `lxreview` is not found, run `uv tool update-shell`. `setup` installs the pinned Chrome and the Claude Code integration under `~/.lxreview`; `login` walks you through the remote desktop and the ChatGPT sign-in.
 
-To view the browser again later, run `lxreview desktop connect` on the same LXPLUS host. It prints the SSH tunnel and VNC viewer instructions to follow on your workstation; see [reconnecting to the desktop](docs/OPERATIONS.md#reconnect-to-the-desktop).
+To view the browser again later, run `lxreview desktop connect` on the same host. It prints the SSH tunnel and VNC viewer instructions to follow on your workstation; see [reconnecting to the desktop](docs/OPERATIONS.md#reconnect-to-the-desktop).
 
 ### Start your first review
 
@@ -101,7 +101,7 @@ New check failures block publication. Pre-existing failures and checks that cann
 
 ## Following and controlling a run
 
-**Closing the Claude chat does not stop the review run.** Watch it again from another conversation on the same LXPLUS host, or use the terminal. Ctrl-C in a terminal watch also stops only the watching.
+**Closing the Claude chat does not stop the review run.** Watch it again from another conversation on the same host, or use the terminal. Ctrl-C in a terminal watch also stops only the watching.
 
 Replace `<run-id>` with the ID returned at startup; `lxreview runs` lists IDs and hosts.
 
@@ -127,14 +127,14 @@ Defaults work without configuration. Override model and effort for one run:
 
 ## Browser modes
 
-Use **`lxplus-browser`** for normal LXPLUS use and persistent runs.
+Use **`lxplus-browser`** for normal use and persistent runs. It runs the browser on the host where you installed LXReview, whether that is your VM or LXPLUS.
 
 | Mode | Best for | Main trade-off |
 | --- | --- | --- |
-| `lxplus-browser` | Runs independent of your workstation | Browser runs on the LXPLUS host |
+| `lxplus-browser` | Runs independent of your workstation | Browser runs on the host |
 | `local-browser` | Keeping the browser on your workstation | Workstation must stay online, awake and connected |
 
-For the alternative mode, run `lxreview setup --mode local-browser --role host` on LXPLUS, then follow the [workstation setup and pairing steps](docs/OPERATIONS.md#local-browser).
+For the alternative mode, run `lxreview setup --mode local-browser --role host` on the host, then follow the [workstation setup and pairing steps](docs/OPERATIONS.md#local-browser).
 
 ## Common commands
 
