@@ -16,6 +16,8 @@ jobs:
         with:
           version: '0.12.19'
           python-version: '3.12'
+          # Nothing is installed here, so there is no cache to save.
+          enable-cache: false
       - name: Tag matches the package version
         run: test "v$(uv version --short)" = "$GITHUB_REF_NAME"
   ci:
