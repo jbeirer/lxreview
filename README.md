@@ -30,7 +30,7 @@ The loop finishes when no accepted substantial issues remain, with at most one e
 
 - An LXPLUS account and a Git checkout of the project you want reviewed.
 - Claude Code installed and authenticated, plus GitHub CLI (`gh`) authenticated with `gh auth login`.
-- Git and [uv](https://docs.astral.sh/uv/) available on the installation host.
+- Git and [uv](https://docs.astral.sh/uv/) on the installation host. LXPLUS does not provide uv; the first install step below installs it.
 - A ChatGPT account that can access the PR, and a workstation with SSH and a VNC viewer for the initial browser login.
 
 The host also needs the desktop and sandbox tools checked by `doctor`; see [host requirements](docs/OPERATIONS.md#lxplus-host-considerations).
@@ -40,6 +40,7 @@ The host also needs the desktop and sandbox tools checked by `doctor`; see [host
 On the LXPLUS host where you will work:
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH="$HOME/.local/bin:$PATH"   # installs uv; skip if you have it
 uv tool install --managed-python lxreview
 lxreview setup --mode lxplus-browser
 lxreview login
