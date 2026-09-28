@@ -24,6 +24,20 @@ flowchart LR
 
 The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes. The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
 
+## See it in action
+
+In Claude Code, `/review-loop` starts the run with the chosen reviewer and worker models, then relays each step as it happens: the review's findings, which ones Claude accepts or rejects, the fix, and the final result. The run itself continues in the background, so closing the chat does not stop it.
+
+![Starting /review-loop in Claude Code](https://raw.githubusercontent.com/jbeirer/lxreview/main/docs/assets/review-loop-claude.gif)
+
+For the full detail, run `lxreview watch <run-id>` in any terminal on the same host. It shows each review pass, every finding with Claude's decision and reason, the commands and checks Claude runs, and the commit it pushes before the next pass. Ctrl-C only stops watching.
+
+![Following the run with lxreview watch](https://raw.githubusercontent.com/jbeirer/lxreview/main/docs/assets/review-loop-watch.gif)
+
+Meanwhile, in the background, ChatGPT runs in LXReview's own Chrome. Each pass opens a fresh Temporary Chat, sends the review request and waits for the complete answer, which must end with a verdict. You never need to watch this, but you can: run `lxreview desktop connect` on the LXPLUS host and follow the printed SSH tunnel and VNC viewer steps on your workstation (in local-browser mode, the Chrome window is on your workstation already).
+
+![ChatGPT reviewing the PR in the background](https://raw.githubusercontent.com/jbeirer/lxreview/main/docs/assets/review-loop-browser.gif)
+
 ## Quick start
 
 ### Prerequisites

@@ -35,4 +35,4 @@ check_untyped_defs = true
 ignore_missing_imports = true
 
 [tool.hatch.build]
-exclude = ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude", "**/AGENTS.md", "**/LXReview-instructions.md", "**/.agents", "**/.codex"]
+exclude = ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude", "**/AGENTS.md", "**/LXReview-instructions.md", "**/.agents", "**/.codex", "docs/assets"]
