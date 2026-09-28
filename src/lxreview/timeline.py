@@ -166,7 +166,7 @@ def describe(
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
     elif kind == "discussion_read":
         texts = [
-            f"PR discussion read: {event.get('comments', 0)} comments,"
+            f"Discussion read: {event.get('comments', 0)} comments,"
             f" {event.get('reviews', 0)} reviews, {event.get('threads', 0)} review threads"
             f" ({event.get('unresolved', 0)} unresolved)"
         ]

@@ -4,13 +4,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import process
 from .errors import Category, LXError
+from .forge import parse, remote_project
 from .paths import Paths, atomic_write
 from .process import binary, run
 
 
 class PullRefPending(LXError):
-    """Local HEAD is pushed, but GitHub's refs/pull/N/head still lags behind it."""
+    """Local HEAD is pushed, but the forge's PR/MR head ref still lags behind it."""
 
 
 # Configuration that redirects a push, pushes extra refs, or runs code during Git commands.
@@ -90,8 +92,8 @@ class Repository:
         self.path, self.paths = path.resolve(), paths
         self.git = binary("git")
 
-    def call(self, *args: str) -> str:
-        return run([self.git, *args], self.paths, cwd=self.path, timeout=60).stdout.strip()
+    def call(self, *args: str, env: dict[str, str] | None = None) -> str:
+        return run([self.git, *args], self.paths, cwd=self.path, timeout=60, env=env).stdout.strip()
 
     def head(self) -> str:
         return self.call("rev-parse", "HEAD")
@@ -232,7 +234,7 @@ class Repository:
         return ["git", "push", remote, f"HEAD:refs/heads/{ref}"]
 
     def preflight(self, target: str, *, settle: float = 0) -> dict:
-        """Verify the review checkpoint; wait up to `settle` s for GitHub's PR ref to catch up."""
+        """Verify the review checkpoint; wait up to `settle` s for the PR/MR ref to catch up."""
         deadline = time.monotonic() + settle
         while True:
             try:
@@ -253,40 +255,42 @@ class Repository:
         upstream = self.call("rev-parse", "--abbrev-ref", "@{upstream}")
         remote, ref = upstream.split("/", 1)
         remote_url = self.call("remote", "get-url", remote)
-        if not re.fullmatch(
-            r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-            remote_url,
-        ):
+        forge = parse(target)
+        pushed_project = remote_project(remote_url, forge.host)
+        if pushed_project is None:
             raise LXError(
                 Category.UNSAFE,
-                "Use a GitHub remote without embedded credentials or custom remote helpers",
+                f"Use a {forge.forge} remote on {forge.host} without embedded credentials"
+                " or custom remote helpers",
             )
-        repo_slug = "/".join(target.split("/")[3:5])
-        pushed_slug = re.sub(
-            r"\.git$", "", re.split(r"github\.com[/:]", remote_url, maxsplit=1)[-1]
-        )
         # A fork's main branch may carry a PR; the base repository's main never may.
-        if ref in ("main", "master") and pushed_slug.lower() == repo_slug.lower():
+        if ref in ("main", "master") and pushed_project.lower() == forge.project.lower():
             raise LXError(
-                Category.UNSAFE, "Use a PR feature branch, not the base repository's main"
+                Category.UNSAFE,
+                f"Use a {forge.noun} feature branch, not the base repository's main",
             )
-        # Query the target repo's PR ref, not a potentially unrelated local upstream.
-        pr = target.rsplit("/", 1)[1]
+        # Query the target project's PR/MR ref, not a potentially unrelated local upstream.
         head = self.head()
         advertised = self.call(
-            "ls-remote", f"https://github.com/{repo_slug}.git", f"refs/pull/{pr}/head"
+            "ls-remote",
+            forge.clone_url,
+            forge.ref,
+            # A project that needs a login fails here instead of prompting on the terminal;
+            # an empty GIT_ASKPASS also skips core.askPass and SSH_ASKPASS.
+            env={**process.environment(self.paths), "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""},
         )
         pushed = self.call("ls-remote", remote, f"refs/heads/{ref}")
         if pushed.startswith(head + "\t") and not advertised.startswith(head + "\t"):
-            # GitHub updates refs/pull/N/head asynchronously after a push.
+            # GitHub and GitLab update the PR/MR head ref asynchronously after a push.
             raise PullRefPending(
                 Category.UNSAFE,
-                "Pushed branch matches HEAD but GitHub has not updated the PR head yet; retry shortly",
+                f"Pushed branch matches HEAD but {forge.forge} has not updated the"
+                f" {forge.noun} head yet; retry shortly",
             )
         if not advertised.startswith(head + "\t") or not pushed.startswith(head + "\t"):
             raise LXError(
                 Category.UNSAFE,
-                "Local HEAD, pushed feature branch, and PR head must match before review",
+                f"Local HEAD, pushed feature branch, and {forge.noun} head must match before review",
             )
         return {"head": head, "branch": branch, "upstream": upstream, "remote_url": remote_url}
 

@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
+from . import forge
 from .errors import Category
 
 
@@ -31,8 +32,7 @@ class ReviewRequest(BaseModel):
     @field_validator("target")
     @classmethod
     def valid_target(cls, value: str) -> str:
-        if not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*", value):
-            raise ValueError("Expected a canonical GitHub PR URL")
+        forge.parse(value)
         return value
 
     @field_validator("head_sha")

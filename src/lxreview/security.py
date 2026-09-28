@@ -8,7 +8,7 @@ from pathlib import Path
 
 SECRET_KEYS = re.compile(r"(?i)(authorization|cookie|password|token|secret|api[_-]?key)")
 SECRET_VALUE = re.compile(
-    r"(?i)(?:Bearer|Basic)\s+\S+|(?:sk-ant-|sk-|ghp_|github_pat_)[A-Za-z0-9_-]{12,}"
+    r"(?i)(?:Bearer|Basic)\s+\S+|(?:sk-ant-|sk-|ghp_|github_pat_|gl(?:pat|dt|rt|ptt|oas)-)[A-Za-z0-9_-]{12,}"
     r"|[\"']?(?:[a-z0-9_]*secret[a-z0-9_]*|[a-z0-9_]*token[a-z0-9_]*|password|api[_-]?key)[\"']?\s*[=:]\s*[\"']?[^\s,;\"']+"
     r"|https?://[^/\s:@]+:[^/\s@]+@"
 )

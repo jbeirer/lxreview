@@ -45,6 +45,33 @@ def test_single_line_full_review():
     assert "conversation" in prompt and "already settled" in prompt
 
 
+def test_gitlab_review_points_at_plain_text_views():
+    sha = "b" * 40
+    request = ReviewRequest(
+        target="https://gitlab.cern.ch/atlas/sub/athena/-/merge_requests/7", head_sha=sha
+    )
+    prompt = prompt_for(request)
+    assert "\n" not in prompt and "merge request" in prompt and "complete MR" in prompt
+    assert "https://gitlab.cern.ch/atlas/sub/athena/-/merge_requests/7.diff" in prompt
+    assert f"https://gitlab.cern.ch/atlas/sub/athena/-/tree/{sha}" in prompt
+    assert "If the MR's conversation is accessible" in prompt
+    github = prompt_for(ReviewRequest(target="https://github.com/o/r/pull/1", head_sha=sha))
+    assert ".diff" not in github and "complete PR at this head" in github
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/o/r/pull/1",
+        "https://gitlab.com/group/project/-/merge_requests/3",
+        "https://gitlab.cern.ch/atlas/athena/-/merge_requests/91262",
+        "https://gitlab.cern.ch/a/b.c/d-e/f_g/-/merge_requests/12",
+    ],
+)
+def test_target_accepts_github_prs_and_gitlab_mrs(url):
+    assert ReviewRequest(target=url, head_sha="a" * 40).target == url
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -52,6 +79,16 @@ def test_single_line_full_review():
         "https://github.com/o/r/pull/1;rm",
         "https://github.com/o/r/pull/1\n",
         "https://github.com/o/r/pull/0",
+        "https://gitlab.example.org/g/p/-/merge_requests/1",
+        "https://gitlab.cern.ch/g/p/merge_requests/1",
+        "https://gitlab.cern.ch/p/-/merge_requests/1",
+        "https://gitlab.cern.ch/g/../p/-/merge_requests/1",
+        "https://gitlab.cern.ch/g/.p/-/merge_requests/1",
+        "https://gitlab.cern.ch/g/p/-/merge_requests/0",
+        "https://gitlab.cern.ch/g/p/-/merge_requests/1/diffs",
+        "https://gitlab.cern.ch/g/p/-/merge_requests/1\n",
+        "https://github.com/g/p/-/merge_requests/1",
+        "https://gitlab.com/o/r/pull/1",
     ],
 )
 def test_target_validation(url):
@@ -398,6 +435,7 @@ def test_private_root_refuses_nested_symlink(paths, tmp_path):
         ("AWS_SECRET_ACCESS_KEY=abc123", "abc123"),
         ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
         ("https://user:private@github.com/repo", "private"),
+        ("pushed with glpat-AbCdEf0123456789xyz", "AbCdEf0123456789xyz"),
         (
             "-----BEGIN OPENSSH PRIVATE KEY-----\nprivatebytes\n-----END OPENSSH PRIVATE KEY-----",
             "privatebytes",
@@ -530,7 +568,7 @@ def test_timeline_summarizes_the_pr_discussion():
         "unresolved": 1,
     }
     assert describe(event)[0].endswith(
-        "PR discussion read: 3 comments, 1 reviews, 2 review threads (1 unresolved)"
+        " Discussion read: 3 comments, 1 reviews, 2 review threads (1 unresolved)"
     )
 
 

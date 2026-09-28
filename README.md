@@ -2,11 +2,11 @@
 
 **Independent AI review loops for Claude Code development on LXPLUS.**
 
-ChatGPT reviews the actual GitHub PR, Claude evaluates and fixes useful findings, and LXReview sends the updated PR through another independent review. The run continues in the background until no accepted substantial issues remain or the pass limit is reached.
+ChatGPT reviews the actual GitHub PR or GitLab merge request, Claude evaluates and fixes useful findings, and LXReview sends the updated PR through another independent review. The run continues in the background until no accepted substantial issues remain or the pass limit is reached.
 
 ## Why LXReview?
 
-- **Independent review** — ChatGPT reads the PR on GitHub rather than relying on Claude's description of its work.
+- **Independent review** — ChatGPT reads the PR on GitHub or the MR on GitLab rather than relying on Claude's description of its work.
 - **Automatic fix/review loop** — accepted findings can be fixed, checked, committed, pushed and reviewed again.
 - **Persistent runs** — reviews keep running after you close the Claude chat.
 - **Visible decisions** — follow findings, accept/reject reasons, edits, checks, commits and subsequent passes.
@@ -16,7 +16,7 @@ ChatGPT reviews the actual GitHub PR, Claude evaluates and fixes useful findings
 
 ```mermaid
 flowchart LR
-    PR[PR on GitHub] --> Review[ChatGPT reviews]
+    PR[PR on GitHub / MR on GitLab] --> Review[ChatGPT reviews]
     Review --> Evaluate[Claude evaluates findings]
     Evaluate --> Fix[Accepted fixes + checks + push]
     Fix --> Review
@@ -29,8 +29,8 @@ The loop finishes when no accepted substantial issues remain, with at most one e
 ### Prerequisites
 
 - An LXPLUS account and a Git checkout of the project you want reviewed.
-- GitHub CLI (`gh`) authenticated with `gh auth login`.
-- A ChatGPT account that can access the PR, and a workstation with SSH and a VNC viewer for the initial browser login.
+- For GitHub PRs, the GitHub CLI (`gh`) authenticated with `gh auth login`. GitLab merge requests on gitlab.com and gitlab.cern.ch need no extra login, but the project must be public: ChatGPT reads the MR without signing in, which it cannot do for internal or private projects.
+- A ChatGPT account that can access the PR or MR, and a workstation with SSH and a VNC viewer for the initial browser login.
 - About 700 MB free in your home directory for the Python environment and the pinned Chrome. Check with `fs listquota ~`.
 
 The host also needs the desktop and sandbox tools checked by `doctor`; see [host requirements](docs/OPERATIONS.md#lxplus-host-considerations).
@@ -61,19 +61,20 @@ To view the browser again later, run `lxreview desktop connect` on the same LXPL
 
 ### Start your first review
 
-Open a **new Claude Code conversation in the project you want reviewed**, with its PR branch checked out and the working tree clean. Replace the example URL with your PR:
+Open a **new Claude Code conversation in the project you want reviewed**, with its PR or MR branch checked out and the working tree clean. Replace the example URL with your PR or MR:
 
 ```text
 /review-loop https://github.com/owner/repository/pull/123
+/review-loop https://gitlab.cern.ch/group/project/-/merge_requests/123
 ```
 
-Or let LXReview find the current branch's PR:
+Or, for GitHub, let LXReview find the current branch's PR:
 
 ```text
 /review-loop
 ```
 
-The branch must be pushed to its upstream and have an open, accessible PR because ChatGPT reads the code on GitHub. The command returns a run ID and follows progress in the same chat.
+The branch must be pushed to its upstream and have an open PR or MR that ChatGPT can open, because it reads the code on GitHub or GitLab. The command returns a run ID and follows progress in the same chat.
 
 ## What happens during a review?
 

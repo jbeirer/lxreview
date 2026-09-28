@@ -77,7 +77,7 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
         add(
             "GitHub CLI",
             ok,
-            "Reads each PR's discussion"
+            "Reads GitHub PR discussions"
             if ok
             else "Run gh auth login"
             if gh
