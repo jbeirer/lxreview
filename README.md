@@ -12,18 +12,6 @@ ChatGPT reviews the actual GitHub PR or GitLab merge request, Claude evaluates a
 - **Visible decisions** — follow findings, accept/reject reasons, edits, checks, commits and subsequent passes.
 - **Uses existing subscriptions** — sign into ChatGPT normally; no OpenAI API key or API credits are required.
 
-## How it works
-
-```mermaid
-flowchart LR
-    PR[PR on GitHub / MR on GitLab] --> Review[ChatGPT reviews]
-    Review --> Evaluate[Claude evaluates findings]
-    Evaluate --> Fix[Accepted fixes + checks + push]
-    Fix --> Review
-```
-
-The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes. The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
-
 ## See it in action
 
 In Claude Code, `/review-loop` starts the run with the chosen reviewer and worker models, then relays each step as it happens: the review's findings, which ones Claude accepts or rejects, the fix, and the final result. The run itself continues in the background, so closing the chat does not stop it.
@@ -37,6 +25,18 @@ For the full detail, run `lxreview watch <run-id>` in any terminal on the same h
 Meanwhile, in the background, ChatGPT runs in LXReview's own Chrome. Each pass opens a fresh Temporary Chat, sends the review request and waits for the complete answer, which must end with a verdict. You never need to watch this, but you can: run `lxreview desktop connect` on the LXPLUS host and follow the printed SSH tunnel and VNC viewer steps on your workstation (in local-browser mode, the Chrome window is on your workstation already).
 
 ![ChatGPT reviewing the PR in the background](https://raw.githubusercontent.com/jbeirer/lxreview/main/docs/assets/review-loop-browser.gif)
+
+## How it works
+
+```mermaid
+flowchart LR
+    PR[PR on GitHub / MR on GitLab] --> Review[ChatGPT reviews]
+    Review --> Evaluate[Claude evaluates findings]
+    Evaluate --> Fix[Accepted fixes + checks + push]
+    Fix --> Review
+```
+
+The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes. The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
 
 ## Quick start
 
