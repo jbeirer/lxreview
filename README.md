@@ -1,5 +1,10 @@
 # LXReview
 
+[![CI](https://github.com/jbeirer/lxreview/actions/workflows/ci.yml/badge.svg)](https://github.com/jbeirer/lxreview/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/lxreview.svg)](https://pypi.org/project/lxreview/)
+[![Python](https://img.shields.io/pypi/pyversions/lxreview.svg)](https://pypi.org/project/lxreview/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jbeirer/lxreview/blob/main/LICENSE)
+
 **Independent AI review loops for Claude Code development on your CERN VM or LXPLUS.**
 
 ChatGPT reviews the actual GitHub PR or GitLab merge request, Claude evaluates and fixes useful findings, and LXReview sends the updated PR through another independent review. The run continues in the background until no accepted substantial issues remain or the pass limit is reached.
