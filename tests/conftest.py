@@ -20,7 +20,7 @@ def paths(tmp_path):
 
 @pytest.fixture(autouse=True)
 def pr_discussion(request, monkeypatch):
-    # No test may reach GitHub; tests marked github exercise fetch with a fake gh.
-    if "github" not in request.keywords:
+    # No test may reach GitHub or GitLab; tests marked forge exercise fetch with fakes.
+    if "forge" not in request.keywords:
         counts = {"comments": 0, "reviews": 0, "threads": 0, "unresolved": 0}
         monkeypatch.setattr("lxreview.discussion.fetch", lambda *a: (DISCUSSION, counts))

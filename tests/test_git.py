@@ -130,7 +130,7 @@ def test_preflight_compares_actual_head_with_both_remote_refs(repo, monkeypatch)
     original = repository.call
     probes = []
 
-    def call(*args):
+    def call(*args, **kwargs):
         if args[0] == "ls-remote":
             probes.append(args)
             return head + "\t" + args[-1]
@@ -145,6 +145,58 @@ def test_preflight_compares_actual_head_with_both_remote_refs(repo, monkeypatch)
     (repository.path / "unrelated.txt").write_text("uncommitted")
     with pytest.raises(LXError, match="dirty"):
         repository.preflight("https://github.com/org/repo/pull/12")
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://:@gitlab.cern.ch:8443/g/sub/p.git",
+        "https://gitlab.cern.ch/g/sub/p",
+        "ssh://git@gitlab.cern.ch:7999/g/sub/p.git",
+        "git@gitlab.cern.ch:g/sub/p.git",
+    ],
+)
+def test_preflight_reads_the_merge_request_ref_of_the_target_project(repo, monkeypatch, remote_url):
+    repository, git = repo
+    git("remote", "set-url", "origin", remote_url)
+    head = git("rev-parse", "HEAD")
+    original = repository.call
+    probes = []
+
+    def call(*args, **kwargs):
+        if args[0] == "ls-remote":
+            env = kwargs.get("env") or {}
+            probes.append((args, (env.get("GIT_TERMINAL_PROMPT"), env.get("GIT_ASKPASS"))))
+            return head + "\t" + args[-1]
+        return original(*args)
+
+    monkeypatch.setattr(repository, "call", call)
+    target = "https://gitlab.cern.ch/g/sub/p/-/merge_requests/12"
+    assert repository.preflight(target)["head"] == head
+    assert probes == [
+        (
+            ("ls-remote", "https://gitlab.cern.ch/g/sub/p.git", "refs/merge-requests/12/head"),
+            ("0", ""),
+        ),
+        (("ls-remote", "origin", "refs/heads/feature"), (None, None)),
+    ]
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://github.com/g/p.git",
+        "https://user:token@gitlab.cern.ch/g/sub/p.git",
+        "https://gitlab.cern.ch.evil.com/g/sub/p.git",
+        "https://gitlab.com/g/sub/p.git",
+        "ext::ssh git@gitlab.cern.ch g/sub/p",
+    ],
+)
+def test_preflight_refuses_remotes_off_the_target_gitlab(repo, remote_url):
+    repository, git = repo
+    git("remote", "set-url", "origin", remote_url)
+    with pytest.raises(LXError, match="GitLab remote on gitlab.cern.ch"):
+        repository.preflight("https://gitlab.cern.ch/g/sub/p/-/merge_requests/12")
 
 
 def test_worktree_audit_stays_under_common_git_directory(repo, paths, tmp_path):
@@ -163,17 +215,21 @@ def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):
     original = repository.call
     lagging = iter([True, True, False])
 
-    def call(*args):
+    def call(*args, **kwargs):
         if args[0] == "ls-remote":
-            stale = "pull" in args[-1] and next(lagging)
+            stale = ("pull" in args[-1] or "merge-requests" in args[-1]) and next(lagging)
             return ("b" * 40 if stale else head) + "\t" + args[-1]
         return original(*args)
 
     monkeypatch.setattr(repository, "call", call)
     monkeypatch.setattr(git_module.time, "sleep", lambda _: None)
-    with pytest.raises(git_module.PullRefPending):
+    with pytest.raises(git_module.PullRefPending, match="GitHub has not updated the PR head"):
         repository.preflight("https://github.com/org/repo/pull/12")
     assert repository.preflight("https://github.com/org/repo/pull/12", settle=60)["head"] == head
+    git("remote", "set-url", "origin", "https://gitlab.com/org/repo.git")
+    lagging = iter([True])
+    with pytest.raises(git_module.PullRefPending, match="GitLab has not updated the MR head"):
+        repository.preflight("https://gitlab.com/org/repo/-/merge_requests/12")
 
 
 def test_sandbox_placeholders_stay_out_of_git_status_only_during_a_run(repo):
@@ -219,11 +275,24 @@ def test_git_dash_c_is_accepted_only_for_the_repository(repo, tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("remote_url", "allowed_main"),
-    [("https://github.com/org/repo.git", False), ("git@github.com:contributor/repo.git", True)],
+    ("target", "remote_url", "allowed_main"),
+    [
+        ("https://github.com/org/repo/pull/12", "https://github.com/org/repo.git", False),
+        ("https://github.com/org/repo/pull/12", "git@github.com:contributor/repo.git", True),
+        (
+            "https://gitlab.cern.ch/atlas/athena/-/merge_requests/12",
+            "https://:@gitlab.cern.ch:8443/atlas/athena.git",
+            False,
+        ),
+        (
+            "https://gitlab.cern.ch/atlas/athena/-/merge_requests/12",
+            "ssh://git@gitlab.cern.ch:7999/someone/athena.git",
+            True,
+        ),
+    ],
 )
 def test_main_branch_is_refused_only_on_the_base_repository(
-    repo, monkeypatch, remote_url, allowed_main
+    repo, monkeypatch, target, remote_url, allowed_main
 ):
     repository, git = repo
     git("branch", "-m", "main")
@@ -235,9 +304,10 @@ def test_main_branch_is_refused_only_on_the_base_repository(
     monkeypatch.setattr(
         repository,
         "call",
-        lambda *args: head + "\t" + args[-1] if args[0] == "ls-remote" else original(*args),
+        lambda *args, **kwargs: (
+            head + "\t" + args[-1] if args[0] == "ls-remote" else original(*args)
+        ),
     )
-    target = "https://github.com/org/repo/pull/12"
     if allowed_main:
         assert repository.preflight(target)["branch"] == "main"
     else:

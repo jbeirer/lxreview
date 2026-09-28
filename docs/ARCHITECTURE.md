@@ -9,6 +9,7 @@ For setup and run control, see [Operations](OPERATIONS.md). For trust boundaries
 | `contracts.py` | Normalized requests, responses, health, reviewer and browser-session protocols |
 | `worker.py` | Provider-neutral review loop |
 | `reviewer.py` | Independent review semantics and prompts |
+| `forge.py` | GitHub PR and GitLab MR targets: URL, push remote and review ref shapes |
 | `browser/playwright.py` | ChatGPT selectors, page state, prompt readback, submission and completion rules |
 | `browser/service.py` | Supervised driver process that owns Chrome and serves named operations over a private Unix socket |
 | `backend.py` | Composition root; workflow prompts and worker logic do not branch on browser placement |

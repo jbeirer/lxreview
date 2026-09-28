@@ -4,10 +4,11 @@ Start with the [quick start](../README.md#quick-start) for installation and your
 
 ## Runs and persistence
 
-Start from a terminal by replacing the PR URL and repository path:
+Start from a terminal by replacing the PR or MR URL and repository path:
 
 ```bash
 lxreview run https://github.com/owner/repository/pull/123 --repo /path/to/repository
+lxreview run https://gitlab.cern.ch/group/project/-/merge_requests/123 --repo /path/to/repository
 lxreview runs
 ```
 
@@ -27,15 +28,17 @@ The run is a supervised background worker. Closing Claude Code, VS Code or SSH d
 
 The timeline includes reviewer findings, Claude's explicit decisions and reasons, messages between steps, edits, commands, checks and pushes. It excludes private model reasoning. Ctrl-C stops watching only; use `stop` with the run ID to cancel the worker.
 
-Resume accepts only `FAILED`, `CANCELLED` or `INTERRUPTED` runs. Use the original host and matching branch/remote, with a clean working tree and a pushed HEAD that matches the PR. Resolve partial edits or an unpushed commit deliberately before resuming; LXReview does not silently commit them. Interrupted pass evidence is retained, and a fresh independent pass starts from the verified checkpoint.
+Resume accepts only `FAILED`, `CANCELLED` or `INTERRUPTED` runs. Use the original host and matching branch/remote, with a clean working tree and a pushed HEAD that matches the PR or MR. Resolve partial edits or an unpushed commit deliberately before resuming; LXReview does not silently commit them. Interrupted pass evidence is retained, and a fresh independent pass starts from the verified checkpoint.
 
 ### Review decisions and verification
 
-Before each review, local HEAD, the upstream branch and GitHub's PR head must agree. LXReview waits briefly for GitHub to update its PR ref after a push. Fork PRs are supported, including a fork's main branch; the target is the PR's head branch, not the base repository's main branch.
+Before each review, local HEAD, the upstream branch and the PR or MR head on GitHub or GitLab must agree. LXReview waits briefly for the forge to update its PR or MR ref after a push. Fork PRs and MRs are supported, including a fork's main branch; the target is the head branch, not the base repository's main branch.
+
+GitLab merge requests are supported on gitlab.com and gitlab.cern.ch, in public projects only: ChatGPT and LXReview both read them without signing in, and `run` refuses an MR that is not visible anonymously. The upstream remote must be on the same GitLab host, over HTTPS (including CERN's Kerberos form `https://:@gitlab.cern.ch:8443/...`) or SSH (`ssh://git@gitlab.cern.ch:7999/...`); pushes use your normal Git credentials.
 
 Every pass opens a fresh Temporary Chat in the same managed browser tab. Previous review findings are never sent to ChatGPT; ChatGPT memory and history do not supply context, and these review chats do not appear in chat history.
 
-Claude evaluates every substantial finding against the code and the PR description, comments, reviews and review threads, including resolution state. It rejects a previously settled point when the recorded reason still holds, citing the comment; the reviewer is also asked not to reopen settled points.
+Claude evaluates every substantial finding against the code and the PR or MR description, comments, reviews or approvals, and review threads, including resolution state. It rejects a previously settled point when the recorded reason still holds, citing the comment; the reviewer is also asked not to reopen settled points.
 
 | Finding or outcome | Behavior |
 | --- | --- |
@@ -146,7 +149,7 @@ Use `lxreview stop <run-id>` to cancel a review. Avoid restarting infrastructure
 
 ## Authentication and AFS tokens
 
-Claude Code must be authenticated on the repository host. The GitHub CLI must also be authenticated there: every evaluation needs PR discussion fetched with `gh`. ChatGPT login occurs normally in the managed browser, without an OpenAI API key.
+Claude Code must be authenticated on the repository host. For GitHub PRs, the GitHub CLI must also be authenticated there: every evaluation needs the PR discussion fetched with `gh`. GitLab MR discussions are read anonymously and need no login. ChatGPT login occurs normally in the managed browser, without an OpenAI API key.
 
 When the installation or repository is on AFS, `run` and `resume` refuse to start with less than two hours of token lifetime. `doctor` reports expiry. Renew before starting a long run:
 
@@ -192,6 +195,7 @@ If you deleted the installation directory by hand, run `lxreview setup` again: i
 | Want diagnostics without a ChatGPT turn | Use `lxreview doctor --no-smoke`; the default performs a real assistant-turn smoke test |
 | Slash commands or MCP unavailable after setup | Open a fresh Claude Code conversation |
 | PR cannot be read | Check `gh auth status`, browser access to the PR and branch/upstream agreement |
+| MR cannot be read | Check that the GitLab project and its merge requests are public (open the MR in a private browser window) and that the upstream remote is on the same GitLab host |
 | Run or services belong to another host | Reconnect to the exact node listed in run/service status |
 | Resume refuses a dirty or unpushed checkout | Inspect the retained changes, resolve them and establish a clean, pushed checkpoint |
 | Workstation connection expired | Repeat host/workstation pairing and keep the workstation awake |
