@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 [project]
 name = "lxreview"
 version = "0.1.2"
-description = "Independent AI review loops for LXPLUS development"
+description = "Independent ChatGPT review loops for Claude Code, on any Linux host or remote machine"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

@@ -8,7 +8,7 @@ Start from a terminal by replacing the PR or MR URL and repository path:
 
 ```bash
 lxreview run https://github.com/owner/repository/pull/123 --repo /path/to/repository
-lxreview run https://gitlab.cern.ch/group/project/-/merge_requests/123 --repo /path/to/repository
+lxreview run https://gitlab.com/group/project/-/merge_requests/123 --repo /path/to/repository
 lxreview runs
 ```
 
@@ -36,7 +36,7 @@ Before each review, local HEAD, the upstream branch and the PR or MR head on Git
 
 Only public repositories can be reviewed, on GitHub as on GitLab: ChatGPT and LXReview both read the PR or MR without signing in, and `run` refuses one that is not visible anonymously.
 
-GitLab merge requests are supported on gitlab.com and gitlab.cern.ch. The upstream remote must be on the same GitLab host, over HTTPS (including CERN's Kerberos form `https://:@gitlab.cern.ch:8443/...`) or SSH (`ssh://git@gitlab.cern.ch:7999/...`); pushes use your normal Git credentials.
+GitLab merge requests are supported on gitlab.com and self-managed GitLab instances, such as gitlab.cern.ch, whose public projects can be read without signing in. The MR URL must use the instance's own host name without a port. The upstream remote must be on the same GitLab host, over HTTPS on any port (including the Kerberos form `https://:@gitlab.cern.ch:8443/...`) or SSH (`git@host:group/project.git` or `ssh://git@host:7999/...`); pushes use your normal Git credentials.
 
 Every pass opens a fresh Temporary Chat in the same managed browser tab. Previous review findings are never sent to ChatGPT; ChatGPT memory and history do not supply context, and these review chats do not appear in chat history.
 
@@ -64,30 +64,34 @@ Claude commits in a separate restricted turn, with commit hooks inside the sandb
 
 A failed push leaves the commit locally and stops the run. Correct the underlying problem and establish a clean, pushed checkpoint before resuming; do not disable the sandbox to work around a failure.
 
-## LXPLUS host considerations
+## Host requirements
 
-An AFS home can share one installation across LXPLUS nodes, but runs and browser services belong to the exact node that started them. Use the host shown by `lxreview runs`; connecting through the generic `lxplus.cern.ch` name may land on another node. Node reboot or drain interrupts runs and requires service restart and checkpoint recovery.
+The repository host can be any Linux machine where you run Claude Code: a remote server or cloud VM you reach over SSH, your own workstation, or a cluster login node. Linux workers require the Claude sandbox prerequisites, including `bwrap` and `socat`. For `host-browser`, the host also needs TigerVNC (`vncserver`, `vncpasswd`), Xfce (`startxfce4`) and `dbus-run-session`, plus the libraries needed by Chrome. Supervision uses systemd user services, or tmux in a systemd scope; a macOS workstation uses launchd. `lxreview doctor` checks readiness.
 
-For `lxplus-browser`, the host needs TigerVNC (`vncserver`, `vncpasswd`), Xfce (`startxfce4`) and `dbus-run-session`, plus the libraries needed by Chrome. Linux workers require the Claude sandbox prerequisites, including `bwrap` and `socat`. Supervision uses systemd user services, or tmux in a systemd scope; workstation macOS uses launchd. `lxreview doctor` checks readiness.
+Runs and services belong to the host that started them, identified by its full host name. A host reboot interrupts runs and requires service restart and checkpoint recovery.
+
+### Shared homes and LXPLUS
+
+On a cluster whose nodes share one home directory, such as LXPLUS with its AFS home, one installation serves every node, but runs and browser services belong to the exact node that started them. Use the host shown by `lxreview runs`; a load-balanced name such as `lxplus.cern.ch` may land on another node. Node drain interrupts runs like a reboot. The AFS token check applies only to installations and repositories under `/afs`, and CVMFS software stacks are kept mounted only where `/cvmfs` exists.
 
 `uv tool install` puts LXReview in its own environment and the `lxreview` command in `~/.local/bin`; `setup` installs Playwright's pinned Chrome runtime under `~/.lxreview` and the fixed launcher `~/.lxreview/bin/lxreview`, which services and the Claude integration call. LXReview does not edit PATH or shell startup files. See [Architecture](ARCHITECTURE.md) for node-local sockets and storage.
 
 ## Browser modes
 
-### LXPLUS browser
+### Host browser
 
-`lxplus-browser` is the normal choice when reviews should continue while the workstation is disconnected.
+`host-browser` is the normal choice when reviews should continue while the workstation is disconnected. Chrome runs on the repository host inside a private VNC desktop that listens only on loopback.
 
 ```bash
-lxreview setup --mode lxplus-browser
+lxreview setup --mode host-browser
 lxreview login
 ```
 
-`login` starts the managed desktop and browser and waits for ChatGPT readiness. If already logged in, it skips the login walkthrough. Otherwise it prints the exact SSH tunnel, VNC viewer connection and generated password needed for that node. Keep the tunnel open while using the viewer and complete normal ChatGPT login yourself.
+`login` starts the managed desktop and browser and waits for ChatGPT readiness. If already logged in, it skips the login walkthrough. Otherwise it prints the SSH tunnel, VNC viewer connection and generated password needed for that host. The tunnel command uses the host's full name; if you reach the host through an SSH config alias or a jump host, use that in the same command instead. Keep the tunnel open while using the viewer and complete normal ChatGPT login yourself.
 
 #### Reconnect to the desktop
 
-To view the managed browser again after closing your VNC viewer, run this in a terminal on the same LXPLUS host where you set up the browser (for example, `lxplus8s01`):
+To view the managed browser again after closing your VNC viewer, run this in a terminal on the same host where you set up the browser:
 
 ```bash
 lxreview desktop connect
@@ -97,23 +101,23 @@ The command prints connection instructions; it does not start the desktop or ope
 
 1. Run the displayed SSH tunnel command in a terminal on your workstation and leave it running.
 2. Open your workstation's VNC viewer at the displayed address.
-3. Enter the generated VNC password to access the Chrome window on LXPLUS.
+3. Enter the generated VNC password to access the Chrome window on the host.
 
-If the managed services are stopped, run `lxreview start` on that LXPLUS host first. For a fresh ChatGPT login, use `lxreview login`.
+If the managed services are stopped, run `lxreview start` on that host first. For a fresh ChatGPT login, use `lxreview login`.
 
-To display just the VNC password on the LXPLUS host:
+To display just the VNC password on the host:
 
 ```bash
 lxreview desktop password
 ```
 
-The password is displayed only in an interactive terminal. Closing the viewer and SSH tunnel leaves the browser and review run on LXPLUS running. Never transfer Chrome profiles between users.
+The password is displayed only in an interactive terminal. Closing the viewer and SSH tunnel leaves the browser and review run on the host running. Never transfer Chrome profiles between users.
 
 ### Local browser
 
-Install LXReview on both the repository host and a Linux/macOS workstation using the [installation commands](../README.md#install-and-log-in), but use the setup commands below in place of the LXPLUS-browser setup and login. Keep the workstation online and awake throughout reviews.
+Install LXReview on both the repository host and a Linux/macOS workstation using the [installation commands](../README.md#install-and-log-in), but use the setup commands below in place of the host-browser setup and login. Keep the workstation online and awake throughout reviews.
 
-On the exact LXPLUS host used for your repository:
+On the repository host:
 
 ```bash
 lxreview setup --mode local-browser --role host
@@ -130,7 +134,15 @@ lxreview login
 
 Replace `<printed-code>` with the code from the host. Then run `lxreview doctor` on the host before starting a review there.
 
-Pairing codes are single-use and last ten minutes. Relay credentials last at most eight hours; pair again for a new session. SSH uses your existing SSH/Kerberos authentication. If noninteractive SSH cannot connect, authenticate interactively first, then repeat pairing.
+The workstation connects to the user and full host name in the code. If it reaches the host another way, such as an SSH config alias, a jump host or a different address, pass that destination with `--ssh`:
+
+```bash
+lxreview pair <printed-code> --ssh my-server
+```
+
+Whichever route you use must always reach the machine that printed the code; pairing refuses a route that lands on another machine. Avoid load-balanced names such as `lxplus.cern.ch`, which can pick a different node when the tunnel reconnects.
+
+Pairing codes are single-use and last ten minutes. Relay credentials last at most eight hours; pair again for a new session. SSH uses your existing SSH configuration and authentication (keys, agent or Kerberos). If noninteractive SSH cannot connect, authenticate interactively first, then repeat pairing.
 
 A disconnected bridge is unavailable. The relay carries named browser operations over a loopback-only SSH reverse tunnel; it does not expose or forward Chrome's debugging protocol. See [Security](../SECURITY.md) for authentication boundaries.
 
@@ -198,9 +210,10 @@ If you deleted the installation directory by hand, run `lxreview setup` again: i
 | Slash commands or MCP unavailable after setup | Open a fresh Claude Code conversation |
 | PR cannot be read | Check `gh auth status`, browser access to the PR and branch/upstream agreement |
 | "cannot be read without signing in" | The repository must be public; open the PR or MR in a private browser window to check. For GitLab, the upstream remote must also be on the same GitLab host |
-| Run or services belong to another host | Reconnect to the exact node listed in run/service status |
+| Run or services belong to another host | Reconnect to the exact host listed in run/service status |
 | Resume refuses a dirty or unpushed checkout | Inspect the retained changes, resolve them and establish a clean, pushed checkpoint |
 | Workstation connection expired | Repeat host/workstation pairing and keep the workstation awake |
+| Pairing reached a different host | Pass an SSH destination that always reaches the host that printed the code, with `pair --ssh` |
 | Browser UI automation fails | Inspect `doctor` output; UI changes can require an LXReview update |
 | Chrome emits a GPU warning | A GPU warning alone does not imply failure; use the readiness checks |
 

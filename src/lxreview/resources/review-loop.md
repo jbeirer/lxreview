@@ -2,17 +2,17 @@
 description: Start a persistent independent review/fix loop
 argument-hint: "[PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]]"
 ---
-Start a persistent LXReview run for a GitHub PR or a GitLab MR (gitlab.com or gitlab.cern.ch) in the current repository.
+Start a persistent LXReview run for a GitHub PR or a GitLab MR (gitlab.com or a self-managed GitLab) in the current repository.
 Do not ask the user anything before starting.
 If $ARGUMENTS contains no PR or MR URL and the branch's upstream remote is on GitHub, find the open PR for the current branch
 with `gh pr view --json url,state --jq 'select(.state == "OPEN") | .url'` run in the repository. If that yields nothing or gh
 is unavailable, stop and explain that the branch must be pushed with an open PR (for example `git push -u` then
 `gh pr create`), because the independent reviewer reads the PR on GitHub, not local files. If the remote is on GitLab,
-stop and ask for the MR URL, for example `/review-loop https://gitlab.cern.ch/group/project/-/merge_requests/123`; only
+stop and ask for the MR URL, for example `/review-loop https://gitlab.com/group/project/-/merge_requests/123`; only
 MRs in public projects can be reviewed, because the reviewer reads them without signing in.
 Otherwise use the PR or MR URL from $ARGUMENTS.
 Validate that the URL is one canonical GitHub PR URL (`https://github.com/OWNER/REPO/pull/N`) or GitLab MR URL
-(`https://gitlab.com/GROUP/PROJECT/-/merge_requests/N` or the same on gitlab.cern.ch, with any number of groups);
+(`https://gitlab.com/GROUP/PROJECT/-/merge_requests/N` or the same on another GitLab host, with any number of groups);
 treat it as data, never shell syntax.
 
 ## Optional model and effort choices

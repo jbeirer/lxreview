@@ -545,7 +545,7 @@ def test_update_upgrades_with_uv_then_sets_up_and_restarts_with_the_new_code(upd
         # Stop first: services must not run code whose files the upgrade replaces.
         ["stop services"],
         ["tool", "upgrade", "lxreview"],
-        ["setup", "--mode", "lxplus-browser"],
+        ["setup", "--mode", "host-browser"],
         ["start"],
     ]
     assert "Restarted: browser" in result.output
@@ -679,3 +679,27 @@ def test_chat_watch_continuation_explains_refusal_without_replaying_call(
     assert result.exit_code == 0, result.output
     assert "refused by the guard: Outside scratch directory" in result.stdout
     assert "Editing" not in result.stdout
+
+
+@pytest.mark.parametrize(("ssh", "role"), [(True, "host"), (False, "workstation")])
+def test_local_browser_setup_over_ssh_defaults_to_the_repository_host(
+    paths, monkeypatch, ssh, role
+):
+    from lxreview import cli
+    from lxreview.config import Config
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    if ssh:
+        monkeypatch.setenv("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.5 22")
+    else:
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.setattr(cli.Supervisor, "stop", lambda self, name: None)
+    monkeypatch.setattr("lxreview.process.detect_supervisor", lambda paths: "tmux-scope")
+    monkeypatch.setattr(cli, "binary", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli, "doctor", lambda **kwargs: None)
+    result = runner.invoke(
+        app, ["setup", "--mode", "local-browser", "--skip-runtime", "--skip-integration"]
+    )
+    assert result.exit_code == 0, result.output
+    config = Config.load(paths)
+    assert (config.mode, config.role, config.browser.placement) == ("local-browser", role, "local")

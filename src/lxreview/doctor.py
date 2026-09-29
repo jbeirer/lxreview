@@ -265,12 +265,12 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
                 )
             except (LXError, OSError, TimeoutError) as exc:
                 add("Chrome shared libraries", False, str(exc))
-    if config.mode == "lxplus-browser":
+    if config.mode == "host-browser":
         try:
             add(
                 "Virtual desktop",
                 Supervisor(paths, config).status("desktop"),
-                "Run lxreview desktop start; node drain/reboot requires restart",
+                "Run lxreview desktop start; a host reboot requires restart",
             )
         except LXError as exc:
             add("Virtual desktop", False, str(exc))
@@ -302,7 +302,7 @@ async def diagnose(paths: Paths, config: Config, smoke: bool = True) -> list[dic
     # Inspect only managed ports, and never infer safety when the OS denies inspection.
     # The browser service listens on a private unix socket, never on TCP.
     ports = set()
-    if config.mode == "lxplus-browser":
+    if config.mode == "host-browser":
         ports.add(5900 + config.runtime.display)
     if local_host:
         try:

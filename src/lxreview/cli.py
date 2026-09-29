@@ -29,7 +29,7 @@ from .runs import TERMINAL, RunStore
 app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
-    help="LXReview — independent AI review loops for LXPLUS development.",
+    help="LXReview — independent AI review loops for Claude Code on any Linux host.",
 )
 desktop_app = typer.Typer(no_args_is_help=True)
 bridge_app = typer.Typer(no_args_is_help=True)
@@ -105,22 +105,23 @@ def setup(
         for name in ("bridge", "browser", "desktop"):
             Supervisor(paths, config).stop(name)
         if not mode:
-            mode = typer.prompt("Browser mode (lxplus-browser/local-browser)", default=config.mode)
+            mode = typer.prompt("Browser mode (host-browser/local-browser)", default=config.mode)
+        # A local-browser setup inside an SSH session is most likely the remote repository host.
         role = role or (
             config.role
             if not first_setup
             else "workstation"
-            if remote or (mode == "local-browser" and not socket.getfqdn().startswith("lxplus"))
+            if remote or (mode == "local-browser" and "SSH_CONNECTION" not in os.environ)
             else "host"
         )
         profile = profile or config.browser.profile
-        if mode == "lxplus-browser" and (role != "host" or platform.system() != "Linux"):
-            raise LXError(Category.CONFIG, "LXPLUS-browser mode requires a Linux repository host")
-        if mode not in ("lxplus-browser", "local-browser") or role not in ("host", "workstation"):
+        if mode == "host-browser" and (role != "host" or platform.system() != "Linux"):
+            raise LXError(Category.CONFIG, "Host-browser mode requires a Linux repository host")
+        if mode not in ("host-browser", "local-browser") or role not in ("host", "workstation"):
             raise LXError(Category.CONFIG, "Choose a valid browser mode and host/workstation role")
-        config.mode = "lxplus-browser" if mode == "lxplus-browser" else "local-browser"
+        config.mode = "host-browser" if mode == "host-browser" else "local-browser"
         config.role = "host" if role == "host" else "workstation"
-        config.browser.placement = "lxplus" if mode == "lxplus-browser" else "local"
+        config.browser.placement = "host" if mode == "host-browser" else "local"
         if profile not in ("isolated", "existing"):
             raise LXError(Category.CONFIG, "Profile must be isolated or existing")
         config.browser.profile = "existing" if profile == "existing" else "isolated"
@@ -131,7 +132,7 @@ def setup(
         if chrome:
             config.browser.chrome = str(executable(chrome))
         config.runtime.host = socket.getfqdn()
-        if first_setup and mode == "lxplus-browser":
+        if first_setup and mode == "host-browser":
             from .services import choose_display
 
             config.runtime.display = choose_display()
@@ -148,18 +149,18 @@ def setup(
         output("Configuration saved. No shell startup files or global runtimes were modified.")
         if mode == "local-browser":
             output(
-                "Local-browser mode needs the workstation online and awake. Run lxreview pair on LXPLUS, then the printed command on the workstation."
+                "Local-browser mode needs the workstation online and awake. Run lxreview pair on the repository host, then the printed command on the workstation."
             )
             if remote:
-                from .bridge.ssh import host_name
+                from .bridge.ssh import destination
 
-                host_name(remote)
+                destination(remote)
                 output(
                     f"Generate the pairing code on {remote}; setup does not copy authentication state."
                 )
         else:
             output(
-                "Run lxreview login for the one-time human ChatGPT login. Services survive ordinary disconnects; host reboot/drain needs restart."
+                "Run lxreview login for the one-time human ChatGPT login. Services survive ordinary disconnects; a host reboot needs restart."
             )
     try:
         doctor(json_output=False, verbose=False, no_smoke=True)
@@ -736,7 +737,10 @@ def _login_steps(paths: Paths, config: Config) -> None:
     step(1, "On your laptop, open a new terminal and run:")
     command(f"ssh -N -o ExitOnForwardFailure=yes -L {address}:{address} {getpass.getuser()}@{host}")
     note("It prints nothing and keeps running. That is expected; leave it open.")
-    note(f"Use exactly {host}: plain lxplus.cern.ch may pick a different machine.")
+    note(
+        f"Use a name that always reaches {host}: a load-balanced alias such as lxplus.cern.ch"
+        " may pick a different machine. An SSH config alias or jump host works too."
+    )
     step(2, "Open the remote desktop in a VNC viewer:")
     for system, value in (
         ("macOS (built-in Screen Sharing), run:", f"open vnc://{address}"),
@@ -769,7 +773,7 @@ def login(timeout: int = 600):
     from .services import start as launch
 
     paths, config = context()
-    if config.mode == "lxplus-browser":
+    if config.mode == "host-browser":
         starting = f"Starting the remote desktop and Chrome on {config.runtime.host}…"
         where = "in the VNC window"
     elif config.role == "workstation":
@@ -792,7 +796,7 @@ def login(timeout: int = 600):
             if shown:
                 return
             shown = True
-            if config.mode == "lxplus-browser":
+            if config.mode == "host-browser":
                 _login_steps(paths, config)
             else:
                 console.print(Text(f"Log in to ChatGPT {where}.", style="bold"))
@@ -887,7 +891,7 @@ def login(timeout: int = 600):
             (f" · {validity(expires)}" if expires else "", "green"),
         )
     )
-    if prompted and config.mode == "lxplus-browser":
+    if prompted and config.mode == "host-browser":
         console.print(
             Text(
                 f"You can close the VNC viewer and the SSH tunnel. Chrome keeps running on {config.runtime.host}.",
@@ -898,8 +902,16 @@ def login(timeout: int = 600):
 
 
 @app.command()
-def pair(code: str = typer.Argument("")):
-    from .bridge.ssh import decode_code, pairing_code
+def pair(
+    code: str = typer.Argument(""),
+    ssh: str = typer.Option(
+        "",
+        help="SSH destination for the repository host, such as an SSH config alias; "
+        "defaults to the user and host name in the code.",
+    ),
+):
+    """Pair a local-browser repository host with the workstation that runs Chrome."""
+    from .bridge.ssh import decode_code, destination, pairing_code
 
     paths, config = context()
     if not code:
@@ -915,20 +927,21 @@ def pair(code: str = typer.Argument("")):
                 "On the workstation run setup --mode local-browser --role workstation first",
             )
         decoded = decode_code(code)
+        decoded["destination"] = destination(ssh) if ssh else decoded["host"]
         Supervisor(paths, config).stop("bridge")
         write_json(paths.root / "state/bridge/local-pairing.json", decoded)
         start()
         Supervisor(paths, config).start("bridge", [str(paths.executable), "bridge-worker"])
         output(
-            "Bridge supervisor started; verify with lxreview doctor on LXPLUS. Pairing lasts up to eight hours."
+            "Bridge supervisor started; verify with lxreview doctor on the repository host. Pairing lasts up to eight hours."
         )
 
 
 @desktop_app.command("start")
 def desktop_start():
     paths, config = context()
-    if config.mode != "lxplus-browser":
-        raise LXError(Category.CONFIG, "Desktop is only available in lxplus-browser mode")
+    if config.mode != "host-browser":
+        raise LXError(Category.CONFIG, "Desktop is only available in host-browser mode")
     Supervisor(paths, config).start("desktop", [str(paths.executable), "service-exec", "desktop"])
 
 

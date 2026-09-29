@@ -46,7 +46,7 @@ class WorkerConfig(Strict):
 
 class BrowserConfig(Strict):
     backend: Literal["playwright"] = "playwright"
-    placement: Literal["local", "lxplus"] = "lxplus"
+    placement: Literal["local", "host"] = "host"
     profile: Literal["isolated", "existing"] = "isolated"
     chrome: str = ""
 
@@ -98,7 +98,7 @@ WORKER_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 class Config(Strict):
     schema_version: Literal[1] = 1
-    mode: Literal["lxplus-browser", "local-browser"] = "lxplus-browser"
+    mode: Literal["host-browser", "local-browser"] = "host-browser"
     role: Literal["host", "workstation"] = "host"
     reviewer: ReviewerConfig = Field(default_factory=ReviewerConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
@@ -131,9 +131,7 @@ class Config(Strict):
             if "LXREVIEW_MAX_PASSES" in os.environ:
                 data.setdefault("review", {})["max_passes"] = int(os.environ["LXREVIEW_MAX_PASSES"])
             config = cls.model_validate(data)
-            if config.browser.placement != (
-                "lxplus" if config.mode == "lxplus-browser" else "local"
-            ):
+            if config.browser.placement != ("host" if config.mode == "host-browser" else "local"):
                 raise LXError(Category.CONFIG, "Browser placement conflicts with mode")
             return config
         except ValidationError as exc:

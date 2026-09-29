@@ -66,6 +66,7 @@ def test_gitlab_review_points_at_plain_text_views():
         "https://gitlab.com/group/project/-/merge_requests/3",
         "https://gitlab.cern.ch/atlas/athena/-/merge_requests/91262",
         "https://gitlab.cern.ch/a/b.c/d-e/f_g/-/merge_requests/12",
+        "https://gitlab.example.org/g/p/-/merge_requests/1",
     ],
 )
 def test_target_accepts_github_prs_and_gitlab_mrs(url):
@@ -79,7 +80,12 @@ def test_target_accepts_github_prs_and_gitlab_mrs(url):
         "https://github.com/o/r/pull/1;rm",
         "https://github.com/o/r/pull/1\n",
         "https://github.com/o/r/pull/0",
-        "https://gitlab.example.org/g/p/-/merge_requests/1",
+        "https://gitlab/g/p/-/merge_requests/1",
+        "https://gitlab.example.org:8443/g/p/-/merge_requests/1",
+        "https://user@gitlab.example.org/g/p/-/merge_requests/1",
+        "https://-gitlab.example.org/g/p/-/merge_requests/1",
+        "https://gitlab.example.org./g/p/-/merge_requests/1",
+        "https://GitHub.com/g/p/-/merge_requests/1",
         "https://gitlab.cern.ch/g/p/merge_requests/1",
         "https://gitlab.cern.ch/p/-/merge_requests/1",
         "https://gitlab.cern.ch/g/../p/-/merge_requests/1",

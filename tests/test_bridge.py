@@ -5,7 +5,7 @@ import pytest
 from aiohttp import web
 
 from lxreview.bridge.relay import application
-from lxreview.bridge.ssh import host_name, tunnel_command
+from lxreview.bridge.ssh import destination, tunnel_command
 from lxreview.errors import LXError
 
 
@@ -50,12 +50,30 @@ async def test_real_http_relay_auth_expiry_and_allowlist(paths):
 
 
 @pytest.mark.parametrize(
+    "host", ["lxplus8s01.cern.ch", "me@build-vm", "me.name@vm.example.org", "10.0.0.5", "vm_1"]
+)
+def test_any_ssh_host_can_be_paired(host):
+    assert destination(host) == host
+
+
+@pytest.mark.parametrize(
     "host",
-    ["lxplus.cern.ch", "evil.com", "-oProxyCommand=x", "lxplus1.cern.ch;rm", "lxplus1.cern.ch\n"],
+    [
+        "-oProxyCommand=x",
+        "me@-oProxyCommand=x",
+        "lxplus1.cern.ch;rm",
+        "lxplus1.cern.ch\n",
+        "ssh://vm",
+        "vm:22",
+        "vm.",
+        "me@",
+        "a@b@vm",
+        "",
+    ],
 )
 def test_invalid_hosts(host):
     with pytest.raises(LXError):
-        host_name(host)
+        destination(host)
 
 
 def test_tunnel_is_loopback_only(monkeypatch):
@@ -86,6 +104,52 @@ def test_pairing_is_one_time_host_bound_and_private(paths, monkeypatch):
     assert (paths.root / "state/bridge/connection.json").stat().st_mode & 0o777 == 0o600
     with pytest.raises(LXError, match="pending pairing"):
         register(paths, payload)
+
+
+def test_pairing_through_a_route_to_another_machine_is_refused(paths, monkeypatch):
+    import socket
+    import time
+
+    from lxreview.bridge.ssh import decode_code, pairing_code, register
+
+    monkeypatch.setattr(socket, "getfqdn", lambda: "vm1.example.org")
+    code = decode_code(pairing_code(paths))
+    # An SSH alias that lands on another machine sharing this home directory.
+    monkeypatch.setattr(socket, "getfqdn", lambda: "vm2.example.org")
+    payload = {"host": "vm1.example.org", "nonce": code["nonce"], "token": "x" * 40}
+    payload["expires"] = time.time() + 100
+    with pytest.raises(LXError, match="reached vm2.example.org, not vm1.example.org"):
+        register(paths, payload)
+    assert not (paths.root / "state/bridge/connection.json").exists()
+
+
+def test_pair_uses_the_given_ssh_destination_and_keeps_the_host_identity(paths, monkeypatch):
+    import json
+    import socket
+
+    from typer.testing import CliRunner
+
+    from lxreview import cli
+    from lxreview.bridge.ssh import pairing_code
+    from lxreview.config import Config
+
+    monkeypatch.setattr(socket, "getfqdn", lambda: "vm1.example.org")
+    code = pairing_code(paths)
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    config = Config(mode="local-browser", role="workstation")
+    config.browser.placement = "local"
+    config.save(paths)
+    monkeypatch.setattr(cli, "start", lambda: None)
+    monkeypatch.setattr(cli.Supervisor, "stop", lambda self, name: None)
+    monkeypatch.setattr(cli.Supervisor, "start", lambda self, name, argv: None)
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["pair", code, "--ssh", "myvm"])
+    assert result.exit_code == 0, result.output
+    stored = json.loads((paths.root / "state/bridge/local-pairing.json").read_text())
+    assert stored["destination"] == "myvm"
+    assert stored["host"].endswith("@vm1.example.org")
+    result = runner.invoke(cli.app, ["pair", code, "--ssh", "-oProxyCommand=x"])
+    assert "Invalid SSH destination" in str(result.exception)
 
 
 def test_expired_pairing_rejected(paths, monkeypatch):

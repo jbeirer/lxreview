@@ -14,7 +14,7 @@ For setup and run control, see [Operations](OPERATIONS.md). For trust boundaries
 | `browser/service.py` | Supervised driver process that owns Chrome and serves named operations over a private Unix socket |
 | `backend.py` | Composition root; workflow prompts and worker logic do not branch on browser placement |
 | `bridge/relay.py` | Named browser operations, with a workstation session lock across a whole review |
-| `bridge/ssh.py` | Exact-host pairing and reverse forwarding |
+| `bridge/ssh.py` | Host-bound pairing over SSH and reverse forwarding |
 | `mcp/server.py` | Stable package-owned stdio API for browser operations |
 | `process.py` | Package-scoped supervision through systemd, tmux under a systemd scope, or launchd |
 
@@ -22,7 +22,7 @@ Configuration uses strict TOML/Pydantic. Schema 1 is the initial schema; unknown
 
 ## Browser placement
 
-In `lxplus-browser` mode, the worker and browser run on the same host:
+In `host-browser` mode, the worker and browser run on the same host:
 
 ```mermaid
 flowchart LR
@@ -36,13 +36,13 @@ In `local-browser` mode, the browser service runs on the workstation:
 
 ```mermaid
 flowchart LR
-    Worker[Worker on LXPLUS] --> Reviewer[Reviewer contract]
+    Worker[Worker on repository host] --> Reviewer[Reviewer contract]
     Reviewer --> Relay[Authenticated operation relay]
     Relay --> Service[Workstation browser service]
     Service --> Chrome[Workstation Chrome]
 ```
 
-The relay is reached through a loopback-only SSH reverse tunnel to the exact LXPLUS node. MCP exposes the browser contract to Claude Code; the worker calls the reviewer backend directly. Browser authentication and transport boundaries are detailed in [Security](../SECURITY.md).
+The relay is reached through a loopback-only SSH reverse tunnel to the repository host; pairing checks that the SSH route reaches the host that issued the code. MCP exposes the browser contract to Claude Code; the worker calls the reviewer backend directly. Browser authentication and transport boundaries are detailed in [Security](../SECURITY.md).
 
 ## Worker lifecycle
 
@@ -75,7 +75,7 @@ Resume verifies branch/remote identity and a clean, pushed HEAD. Incomplete pass
 
 ## Hosts, storage and integration
 
-Host identity prevents shared-home LXPLUS users from treating another node's services as local. Supervisor names include an installation-root hash to avoid collisions between installations. Sockets and service temporary files live in `/run/user/<uid>/lxreview-<hash>` when available, falling back to the installation's `run` directory; AFS homes cannot hold Unix sockets.
+Host identity prevents users of shared homes, such as LXPLUS nodes, from treating another node's services as local. Supervisor names include an installation-root hash to avoid collisions between installations. Sockets and service temporary files live in `/run/user/<uid>/lxreview-<hash>` when available, falling back to the installation's `run` directory; AFS homes cannot hold Unix sockets.
 
 | Location | Contents |
 | --- | --- |

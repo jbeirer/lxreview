@@ -87,21 +87,21 @@ def start(paths: Paths, config: Config) -> None:
             "Start/pair the browser on the workstation; no browser will be launched on this host",
         )
     supervisor = Supervisor(paths, config)
-    if config.mode == "lxplus-browser":
+    if config.mode == "host-browser":
         supervisor.start("desktop", [str(paths.executable), "service-exec", "desktop"])
     supervisor.start("browser", [str(paths.executable), "service-exec", "browser"])
 
 
 def service_exec(paths: Paths, config: Config, name: str) -> None:
     env = environment(paths, desktop=True)
-    if config.mode == "lxplus-browser":
+    if config.mode == "host-browser":
         env["XAUTHORITY"] = str(paths.root / "state/vnc/.Xauthority")
     if name == "desktop":
         # TigerVNC state stays below the package root even on versions that ignore XDG.
         env["HOME"] = str(paths.root / "state/vnc")
         argv = desktop_command(paths, config)
     elif name == "browser":
-        if config.mode == "lxplus-browser":
+        if config.mode == "host-browser":
             import time
 
             deadline = time.monotonic() + 30

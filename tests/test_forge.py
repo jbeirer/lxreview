@@ -10,6 +10,7 @@ def test_targets_know_their_review_ref():
         "https://github.com/o/r.git",
         "PR",
     )
+    assert parse("https://git.example.org/team/p/-/merge_requests/3").kind == "gitlab"
     gitlab = parse("https://gitlab.cern.ch/g/sub/p/-/merge_requests/12")
     assert (gitlab.host, gitlab.project, gitlab.number) == ("gitlab.cern.ch", "g/sub/p", 12)
     assert (gitlab.ref, gitlab.clone_url, gitlab.forge) == (
@@ -30,6 +31,8 @@ def test_targets_know_their_review_ref():
         ("ssh://git@gitlab.cern.ch:7999/g/sub/p.git", "gitlab.cern.ch", "g/sub/p"),
         ("git@gitlab.com:g/p.git", "gitlab.com", "g/p"),
         ("ssh://git@gitlab.com/g/p", "gitlab.com", "g/p"),
+        ("git@git.example.org:team/sub/p.git", "git.example.org", "team/sub/p"),
+        ("https://git.example.org:8443/team/p.git", "git.example.org", "team/p"),
     ],
 )
 def test_push_remotes_name_their_project(remote, host, project):

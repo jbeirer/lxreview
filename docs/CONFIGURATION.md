@@ -101,7 +101,7 @@ CVMFS repositories mentioned by setup or `path`, and those already mounted, rema
 | --- | --- |
 | `LXREVIEW_HOME` | Select the installation root for direct package invocations; generated launchers pin their own root |
 | `LXREVIEW_MAX_PASSES` | Override the configured pass limit |
-| `lxreview setup --mode lxplus-browser` | Browser on the repository host |
+| `lxreview setup --mode host-browser` | Browser on the repository host |
 | `lxreview setup --mode local-browser --role host` | Repository host paired to a workstation browser |
 | `lxreview setup --mode local-browser --role workstation` | Workstation side of that pairing |
 

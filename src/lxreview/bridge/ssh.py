@@ -18,16 +18,20 @@ from ..process import binary, environment
 from .relay import application
 
 
-def host_name(value: str) -> str:
-    if not re.fullmatch(r"(?:[a-zA-Z0-9_][a-zA-Z0-9_.-]*@)?lxplus[a-zA-Z0-9]+\.cern\.ch", value):
-        raise LXError(
-            Category.CONFIG, "Pair with an exact lxplusNN.cern.ch host, not the lxplus alias"
-        )
+def destination(value: str) -> str:
+    """An SSH destination: [user@]host, where host is a name, an SSH config alias or an IPv4.
+
+    Nothing that ssh could read as an option or a URL is accepted.
+    """
+    if not re.fullmatch(
+        r"(?:[a-zA-Z0-9_][a-zA-Z0-9_.-]*@)?[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?", value
+    ):
+        raise LXError(Category.CONFIG, f"Invalid SSH destination {value!r}; use [user@]host")
     return value
 
 
 def tunnel_command(host: str, remote: int, local: int) -> list[str]:
-    host_name(host)
+    destination(host)
     if not all(1024 <= p <= 65535 for p in (remote, local)):
         raise LXError(Category.CONFIG, "Invalid tunnel port")
     return [
@@ -52,7 +56,7 @@ def tunnel_command(host: str, remote: int, local: int) -> list[str]:
 
 def pairing_code(paths: Paths) -> str:
     code = {
-        "host": host_name(f"{getpass.getuser()}@{socket.getfqdn()}"),
+        "host": destination(f"{getpass.getuser()}@{socket.getfqdn()}"),
         "root": str(paths.root),
         "nonce": secrets.token_urlsafe(24),
         "expires": time.time() + 600,
@@ -65,7 +69,7 @@ def pairing_code(paths: Paths) -> str:
 def decode_code(value: str) -> dict:
     try:
         code = json.loads(base64.urlsafe_b64decode(value))
-        host_name(code["host"])
+        destination(code["host"])
         if (
             not isinstance(code["expires"], (int, float))
             or not math.isfinite(code["expires"])
@@ -79,7 +83,8 @@ def decode_code(value: str) -> dict:
         return code
     except (ValueError, KeyError, TypeError) as exc:
         raise LXError(
-            Category.CONFIG, "Invalid or expired pairing code; generate a new code on LXPLUS"
+            Category.CONFIG,
+            "Invalid or expired pairing code; generate a new code on the repository host",
         ) from exc
 
 
@@ -98,7 +103,11 @@ def register(paths: Paths, payload: dict) -> dict:
         ):
             raise LXError(Category.AUTH, "Pairing expired or nonce mismatch")
         if payload.get("host") != socket.getfqdn():
-            raise LXError(Category.AUTH, "Pairing reached the wrong LXPLUS host")
+            raise LXError(
+                Category.AUTH,
+                f"Pairing reached {socket.getfqdn()}, not {payload.get('host')}; use an SSH"
+                " destination that always reaches the host that printed the code",
+            )
         token = payload["token"]
         expires = float(payload["expires"])
         if (
@@ -176,6 +185,8 @@ async def serve(paths: Paths, config: Config) -> None:
     await web.SockSite(runner, sock).start()
     ssh = binary("ssh")
     remote_cli = code["root"] + "/bin/lxreview"
+    # The SSH route may be an alias or jump host; the code's host name is what must answer.
+    target = destination(code["destination"])
     register_cmd = [
         ssh,
         "-T",
@@ -183,7 +194,7 @@ async def serve(paths: Paths, config: Config) -> None:
         "BatchMode=yes",
         "-o",
         "ConnectTimeout=8",
-        code["host"],
+        target,
         shlex.join([remote_cli, "bridge-register"]),
     ]
     process = await asyncio.create_subprocess_exec(
@@ -215,7 +226,7 @@ async def serve(paths: Paths, config: Config) -> None:
         )
         await supervise_tunnel(
             lambda: asyncio.create_subprocess_exec(
-                *tunnel_command(code["host"], registered["port"], local),
+                *tunnel_command(target, registered["port"], local),
                 env=environment(paths),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -235,7 +246,7 @@ async def serve(paths: Paths, config: Config) -> None:
             "BatchMode=yes",
             "-o",
             "ConnectTimeout=5",
-            code["host"],
+            target,
             shlex.join([remote_cli, "bridge-revoke"]),
             env=environment(paths),
             stdin=asyncio.subprocess.PIPE,
