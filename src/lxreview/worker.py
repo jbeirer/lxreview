@@ -610,6 +610,7 @@ async def draft_review(
         return
     unchanged(repo, state, head, "while findings were evaluated")
     if not accepted:
+        on_github(target, paths, config, head, "while findings were evaluated")
         store.update(completed_pass=number)
         store.finish(finished_status(response))
         return
@@ -737,6 +738,14 @@ async def execute(
                     considered = substantial + (non_blocking if polish else [])
                 finished = finished_status(response)
                 if response.verdict == Verdict.CLEAN and not considered:
+                    if state.get("review_only"):
+                        on_github(
+                            forge.parse(state["target"]),
+                            paths,
+                            config,
+                            identity["head"],
+                            "while the reviewer was running",
+                        )
                     store.update(completed_pass=number)
                     store.finish("CLEAN")
                     return

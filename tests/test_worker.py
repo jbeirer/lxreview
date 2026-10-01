@@ -882,6 +882,29 @@ async def test_review_only_posts_nothing_when_no_finding_is_accepted(paths, tmp_
 
 
 @pytest.mark.parametrize(
+    ("raw", "decisions", "moment"),
+    [
+        ("VERDICT: CLEAN", {}, "while the reviewer was running"),
+        (
+            "SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES",
+            {"S1": "REJECTED"},
+            "while findings were evaluated",
+        ),
+    ],
+)
+async def test_a_push_the_pr_ref_does_not_show_yet_is_no_clean_result(
+    paths, tmp_path, github, raw, decisions, moment
+):
+    store = review_only(paths, tmp_path)
+    # refs/pull/1/head still names the reviewed head, but the PR has moved on.
+    github["head"] = "b" * 40
+    await execute(paths, Config(), store, Reviewer([raw]), reviewing(decisions, []))
+    state = store.load()
+    assert state["status"] == "FAILED" and f"The PR head changed {moment}" in state["error"]
+    assert state["completed_pass"] == 0 and not github["posted"]
+
+
+@pytest.mark.parametrize(
     "comments",
     [
         # A comment for a rejected finding, and an accepted finding without one.
