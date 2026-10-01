@@ -575,6 +575,13 @@ def resume(run_id: str):
         if state.get("review_only"):
             if state["completed_pass"]:
                 raise LXError(Category.UNSAFE, "This review-only run already created its review")
+            # A worker stopped after posting but before recording its pass leaves this behind.
+            posted = Path(state["audit"]) / "pass-01/review-posted.json"
+            if posted.exists():
+                url = json.loads(posted.read_text()).get("html_url", "")
+                raise LXError(
+                    Category.UNSAFE, f"This review-only run already created its review: {url}"
+                )
             repo.review_checkpoint(state["target"])
         else:
             repo.verify_identity(state["identity"])

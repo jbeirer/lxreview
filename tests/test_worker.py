@@ -748,7 +748,10 @@ def github(monkeypatch):
         "pending": None,
         "posted": [],
         "discarded": [],
+        # The PR head GitHub's API names; refs/pull/N/head (Drafting.pr_head) may lag behind it.
+        "head": "a" * 40,
     }
+    monkeypatch.setattr("lxreview.comments.pr_head", lambda *a: fake["head"])
     monkeypatch.setattr("lxreview.worker.Repository", Drafting)
     monkeypatch.setattr(Drafting, "pr_head", "a" * 40)
     monkeypatch.setattr(Repo, "head_value", "a" * 40)
@@ -940,6 +943,40 @@ async def test_a_pr_head_that_moved_during_creation_discards_the_review(
     await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
     state = store.load()
     assert state["status"] == "FAILED" and "not the PR head" in state["error"]
+    assert [r["id"] for r in github["discarded"]] == [7] and state["completed_pass"] == 0
+    assert not (Path(state["audit"]) / "pass-01/review-posted.json").exists()
+
+
+async def test_a_push_the_pr_ref_does_not_show_yet_gets_no_review(paths, tmp_path, github):
+    store = review_only(paths, tmp_path)
+    # refs/pull/1/head still names the reviewed head, but the PR has moved on.
+    github["head"] = "b" * 40
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    state = store.load()
+    assert state["status"] == "FAILED"
+    assert "The PR head changed before the review was posted" in state["error"]
+    assert not github["posted"] and state["completed_pass"] == 0
+
+
+async def test_a_push_during_creation_the_pr_ref_does_not_show_discards_the_review(
+    paths, tmp_path, github, monkeypatch
+):
+    store = review_only(paths, tmp_path)
+
+    def moved(target, payload, paths, config):
+        github["posted"].append(payload)
+        github["head"] = "b" * 40
+        return {"id": 7, "html_url": DRAFT, "inline": len(payload["comments"])}
+
+    monkeypatch.setattr("lxreview.comments.post", moved)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    state = store.load()
+    assert state["status"] == "FAILED"
+    assert "The PR head changed while the review was posted" in state["error"]
     assert [r["id"] for r in github["discarded"]] == [7] and state["completed_pass"] == 0
     assert not (Path(state["audit"]) / "pass-01/review-posted.json").exists()
 

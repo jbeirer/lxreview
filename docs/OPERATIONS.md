@@ -87,7 +87,7 @@ A pending review is visible only to you until you submit it on GitHub, where you
 Requirements:
 
 - A GitHub PR. GitLab merge requests are refused, because LXReview reads them anonymously and creating a review needs a login.
-- A clean checkout whose HEAD is the PR head, for example after `gh pr checkout <number>` or `git fetch origin pull/<number>/head && git checkout FETCH_HEAD`. The branch, its upstream and push settings do not matter, so other people's PRs work. If the PR head moves before the review is created, the run fails without posting; if it moves while the review is created, LXReview discards that review and the run fails.
+- A clean checkout whose HEAD is the PR head, for example after `gh pr checkout <number>` or `git fetch origin pull/<number>/head && git checkout FETCH_HEAD`. The branch, its upstream and push settings do not matter, so other people's PRs work. LXReview asks GitHub for the PR head before and after creating the review. If the PR head moves before the review is created, the run fails without posting; if it moves while the review is created, LXReview discards that review and the run fails.
 - No pending review of yours on the PR: GitHub allows one per person and PR, so `run` refuses until you submit or discard the existing one.
 - `gh` logged in as the account that should own the review, with permission to comment on the PR.
 - No `--max-passes`, `--commit` or `--push`: the run is always one pass and never commits or pushes.

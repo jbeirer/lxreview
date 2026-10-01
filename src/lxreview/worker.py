@@ -446,6 +446,13 @@ def unchanged(repo: Repository, state: dict, head: str, moment: str) -> None:
         raise LXError(Category.UNSAFE, f"HEAD changed {moment}")
 
 
+def on_github(target: forge.Target, paths: Paths, config: Config, head: str, moment: str) -> None:
+    """GitHub's API must still name head as the PR head: refs/pull/N/head, which the
+    checkpoint reads, is updated asynchronously and may not show a push yet."""
+    if comments.pr_head(target, paths, config) != head:
+        raise LXError(Category.UNSAFE, f"The PR head changed {moment}")
+
+
 def finished_status(response: ReviewResponse) -> str:
     """The outcome of a pass that ends without accepted findings."""
     return "CLEAN" if response.verdict == Verdict.CLEAN else "NO_VALID_SUBSTANTIAL_FINDINGS"
@@ -627,9 +634,11 @@ async def draft_review(
     # The comments describe the reviewed head; a PR that moved meanwhile gets none. GitHub
     # accepts an older commit_id, so a move during creation discards the new review.
     unchanged(repo, state, head, "before the review was posted")
+    on_github(target, paths, config, head, "before the review was posted")
     posted = comments.post(target, payload, paths, config)
     try:
         unchanged(repo, state, head, "while the review was posted")
+        on_github(target, paths, config, head, "while the review was posted")
     except LXError:
         comments.discard(target, posted, paths, config)
         raise

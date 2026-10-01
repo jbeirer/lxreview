@@ -86,6 +86,23 @@ def pending_review(target: forge.Target, paths: Paths, config: Config) -> str | 
     return None
 
 
+def pr_head(target: forge.Target, paths: Paths, config: Config) -> str:
+    """The PR's head commit as GitHub's API reports it; refs/pull/N/head may still lag."""
+    command, env = gh(paths, config)
+    endpoint = f"repos/{target.project}/pulls/{target.number}"
+    try:
+        result = run([command, "api", endpoint], paths, env=env, check=False, timeout=120)
+        if result.returncode:
+            raise ValueError
+        return str(json.loads(result.stdout)["head"]["sha"])
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
+        raise LXError(
+            Category.UNAVAILABLE,
+            "Could not read the PR's head with gh; check gh auth status and access to the"
+            " repository",
+        ) from exc
+
+
 def hunks(patch: str | None) -> list[range]:
     """The new-side line ranges of a file's diff hunks: the lines a RIGHT comment can use."""
     found = []
@@ -268,8 +285,8 @@ def discard(target: forge.Target, review: dict, paths: Paths, config: Config) ->
     if failed:
         raise LXError(
             Category.UNSAFE,
-            f"The checkout or PR head changed while the review was created, and its pending review"
-            f" {review['html_url']} could not be discarded; discard it on GitHub",
+            "The reviewed head could not be confirmed after the review was created, and its"
+            f" pending review {review['html_url']} could not be discarded; discard it on GitHub",
         )
 
 

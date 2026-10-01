@@ -906,6 +906,25 @@ def test_resuming_a_review_only_run_checks_for_its_review(
         assert calls == ["review_checkpoint", "pending_review", "run-" + store.id]
 
 
+def test_a_review_only_run_that_posted_before_recording_its_pass_is_not_resumed(
+    checkout, paths, tmp_path
+):
+    from pathlib import Path
+
+    from lxreview.runs import RunStore
+
+    calls, _ = checkout
+    store = RunStore.create(paths, tmp_path, PR, {"head": "a" * 40}, 1, tmp_path / "audit", True)
+    # The worker stopped after creating the review; the user has since submitted it.
+    store.update(status="INTERRUPTED", completed_pass=0)
+    posted = Path(store.load()["audit"]) / "pass-01/review-posted.json"
+    posted.parent.mkdir(parents=True)
+    posted.write_text(json.dumps({"id": 7, "html_url": DRAFT}))
+    result = runner.invoke(app, ["resume", store.id])
+    assert f"already created its review: {DRAFT}" in str(result.exception)
+    assert calls == [] and posted.exists()
+
+
 def test_the_timeline_links_the_draft_review():
     from lxreview.timeline import PHASES, describe, style
 

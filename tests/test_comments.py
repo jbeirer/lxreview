@@ -77,6 +77,21 @@ def test_unreadable_reviews_refuse_rather_than_guess(paths, gh):
         comments.pending_review(TARGET, paths, Config())
 
 
+def test_pr_head_is_the_head_githubs_api_names(paths, gh):
+    calls, answers = gh
+    answers.append((0, json.dumps({"number": 7, "head": {"sha": HEAD, "ref": "f"}})))
+    assert comments.pr_head(TARGET, paths, Config()) == HEAD
+    assert calls[0]["argv"] == ["/usr/bin/gh", "api", "repos/org/repo/pulls/7"]
+
+
+@pytest.mark.parametrize("answer", [(1, '{"message": "Not Found"}'), (0, "{}"), (0, "not json")])
+def test_an_unreadable_pr_head_refuses_rather_than_guess(paths, gh, answer):
+    _, answers = gh
+    answers.append(answer)
+    with pytest.raises(LXError, match="Could not read the PR's head with gh"):
+        comments.pr_head(TARGET, paths, Config())
+
+
 def comment(finding, path, line, start_line=None, body="Fix it."):
     return {"finding": finding, "path": path, "line": line, "start_line": start_line, "body": body}
 
