@@ -270,41 +270,64 @@ def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):
 
 
 def test_worktree_tree_sees_every_uncommitted_change(repo):
+    from lxreview import process
+
     repository, git = repo
+    env = process.environment(repository.paths)
     (repository.path / "tracked.txt").write_text("one\n")
     (repository.path / ".gitignore").write_text("*.log\n")
     git("add", "tracked.txt", ".gitignore")
     git("commit", "-m", "tracked")
-    clean = repository.worktree_tree()
+    clean = repository.worktree_tree(env)
     assert clean == repository.tree("HEAD")
     (repository.path / "build.log").write_text("ignored output")
-    assert repository.worktree_tree() == clean
+    assert repository.worktree_tree(env) == clean
     (repository.path / "tracked.txt").write_text("two\n")
-    edited = repository.worktree_tree()
+    edited = repository.worktree_tree(env)
     assert edited != clean
     git("add", "tracked.txt")
-    assert repository.worktree_tree() == edited
+    assert repository.worktree_tree(env) == edited
     new = repository.path / "new.py"
     new.write_text("a = 1\n")
-    added = repository.worktree_tree()
+    added = repository.worktree_tree(env)
     assert added != edited
     # Building the tree leaves the real index alone.
     assert "?? new.py" in git("status", "--porcelain").splitlines()
     new.write_text("a = 2\n")
-    assert repository.worktree_tree() != added
+    assert repository.worktree_tree(env) != added
     new.write_text("a = 1\n")
     new.chmod(0o755)
-    assert repository.worktree_tree() != added
+    assert repository.worktree_tree(env) != added
     new.unlink()
     new.symlink_to("a = 1\n")
-    assert repository.worktree_tree() != added
+    assert repository.worktree_tree(env) != added
     new.unlink()
     git("checkout", "HEAD", "--", "tracked.txt")
-    assert repository.worktree_tree() == clean
+    assert repository.worktree_tree(env) == clean
     new.write_text("a = 1\n")
     git("add", "--all")
     git("commit", "-m", "everything")
-    assert repository.tree("HEAD") == repository.worktree_tree()
+    assert repository.tree("HEAD") == repository.worktree_tree(env)
+
+
+def test_worktree_tree_runs_clean_filters_from_the_given_environment(repo, tmp_path):
+    from lxreview import process
+
+    repository, git = repo
+    # A required clean filter installed outside the system PATH, as git-lfs often is.
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "upper-filter").write_text("#!/bin/sh\nexec tr a-z A-Z\n")
+    (tools / "upper-filter").chmod(0o755)
+    git("config", "filter.upper.clean", "upper-filter")
+    git("config", "filter.upper.required", "true")
+    (repository.path / ".gitattributes").write_text("*.txt filter=upper\n")
+    (repository.path / "notes.txt").write_text("checked\n")
+    env = process.environment(repository.paths)
+    with pytest.raises(LXError):
+        repository.worktree_tree(env)
+    tree = repository.worktree_tree({**env, "PATH": f"{tools}:{env['PATH']}"})
+    assert git("cat-file", "-p", f"{tree}:notes.txt") == "CHECKED"
 
 
 def test_sandbox_placeholders_stay_out_of_git_status_only_during_a_run(repo):

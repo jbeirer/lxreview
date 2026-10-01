@@ -591,6 +591,9 @@ async def execute(
                     )
                     return
                 store.update(phase="editing_testing")
+                # The checked change, captured once: its diff is what the user sees and
+                # approves, and the commit must hold exactly this tree.
+                checked = None
                 try:
                     fixes = await turn(
                         paths,
@@ -608,6 +611,7 @@ async def execute(
                     try:
                         repo.verify_identity(state["identity"])
                         # Untracked files belong to the change, as they do in the commit.
+                        checked = repo.worktree_tree(toolchain.push_environment(paths, config))
                         atomic_write(
                             pass_dir / "diff.patch",
                             redact(
@@ -616,7 +620,7 @@ async def execute(
                                     "--no-ext-diff",
                                     "--no-textconv",
                                     identity["head"],
-                                    repo.worktree_tree(),
+                                    checked,
                                 )
                             ),
                         )
@@ -640,9 +644,13 @@ async def execute(
                 repo.verify_identity(state["identity"])
                 if repo.head() != identity["head"]:
                     raise LXError(Category.UNSAFE, "HEAD changed during the edit/test phase")
+                environment = toolchain.push_environment(paths, config)
                 if config.publish.commit == "ask":
                     # The commit must hold exactly the checked change.
-                    checked = repo.worktree_tree()
+                    if checked is None:
+                        raise LXError(Category.UNSAFE, "The checked change could not be captured")
+                    if repo.worktree_tree(environment) != checked:
+                        raise LXError(Category.UNSAFE, "The working tree changed after the checks")
                     changed = repo.call(
                         "diff", "--name-only", "--no-renames", identity["head"], checked
                     ).splitlines()
@@ -652,7 +660,7 @@ async def execute(
                     repo.verify_identity(state["identity"])
                     if repo.head() != identity["head"]:
                         raise LXError(Category.UNSAFE, "HEAD changed while waiting for approval")
-                    if repo.worktree_tree() != checked:
+                    if repo.worktree_tree(environment) != checked:
                         raise LXError(
                             Category.UNSAFE, "The working tree changed while waiting for approval"
                         )
@@ -686,11 +694,7 @@ async def execute(
                         store.finish("CANCELLED")
                         return
                 store.event("push_started", commit=published.commit)
-                pushed = repo.publish(
-                    published.commit,
-                    identity["head"],
-                    toolchain.push_environment(paths, config),
-                )
+                pushed = repo.publish(published.commit, identity["head"], environment)
                 fixes = FixResult(**fixes.model_dump(), commit=pushed, pushed=True)
                 write_json(pass_dir / "metadata.json", redact(fixes.model_dump()))
                 repo.verify_identity(state["identity"])

@@ -42,7 +42,7 @@ class Repo:
     worktree = "checked tree"
     committed: str | None = None
 
-    def worktree_tree(self):
+    def worktree_tree(self, env):
         return self.worktree
 
     def tree(self, commit):
@@ -591,6 +591,20 @@ async def test_declining_stops_the_run_and_keeps_the_work(paths, tmp_path, waiti
     assert state["status"] == "CANCELLED" and state["awaiting"] is None
     # The checked edits (or the local commit) stay; nothing more happens.
     assert len(prompts) == turns and not PushRecorder.pushed
+
+
+async def test_approval_shows_the_tree_it_approves(paths, tmp_path, waiting, monkeypatch):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    trees = iter(["checked tree", "autosaved after the diff was captured"])
+    monkeypatch.setattr(Repo, "worktree_tree", lambda self, env: next(trees))
+    config = Config().with_choices({"commit": "ask"})
+    await execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    state = store.load()
+    assert state["status"] == "FAILED"
+    assert "working tree changed after the checks" in state["error"]
+    assert len(prompts) == 2 and "approval_requested" not in kinds(store)
 
 
 async def test_a_commit_holds_exactly_the_checked_change(paths, tmp_path, waiting, monkeypatch):

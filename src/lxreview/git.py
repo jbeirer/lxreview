@@ -102,12 +102,13 @@ class Repository:
     def head(self) -> str:
         return self.call("rev-parse", "HEAD")
 
-    def worktree_tree(self) -> str:
+    def worktree_tree(self, env: dict[str, str]) -> str:
         """The Git tree a commit of every uncommitted change would hold: tracked edits and
         untracked, non-ignored files with their modes and types. It is built in a temporary
-        index, so the real index stays untouched."""
+        index, so the real index stays untouched. env must find the repository's clean
+        filters, such as git-lfs, like the environment for LXReview's own push."""
         with tempfile.TemporaryDirectory() as scratch:
-            env = {**process.environment(self.paths), "GIT_INDEX_FILE": f"{scratch}/index"}
+            env = {**env, "GIT_INDEX_FILE": f"{scratch}/index"}
             self.call("read-tree", "HEAD", env=env)
             self.call("add", "--all", env=env)
             return self.call("write-tree", env=env)
