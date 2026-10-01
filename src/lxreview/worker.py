@@ -131,12 +131,20 @@ async def claude_turn(
         )
         + " || exit 2"
     )
+    # Claude Code runs the tool when a hook times out, so the guard's limit outlasts the turn:
+    # a stalled guard ends with the whole turn instead.
+    hook_timeout = int(config.review.worker_timeout) + 60
     write_json(
         settings_file,
         {
             "hooks": {
                 "PreToolUse": [
-                    {"matcher": ".*", "hooks": [{"type": "command", "command": hook_cmd}]}
+                    {
+                        "matcher": ".*",
+                        "hooks": [
+                            {"type": "command", "command": hook_cmd, "timeout": hook_timeout}
+                        ],
+                    }
                 ]
             },
             "permissions": {

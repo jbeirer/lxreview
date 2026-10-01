@@ -236,14 +236,16 @@ async def test_every_turn_shares_tools_and_schema_so_the_prompt_cache_survives(p
         f"#!{sys.executable}\n"
         + """import json,os,re,subprocess,sys
 settings=json.load(open(sys.argv[sys.argv.index('--settings')+1]))
-command=settings['hooks']['PreToolUse'][0]['hooks'][0]['command']
+hook=settings['hooks']['PreToolUse'][0]['hooks'][0]
+command=hook['command']
 phase=re.search(r'--phase (\\w+)',command).group(1)
 prompt=sys.stdin.read()
 # The guard executable does not exist here: the hook must block rather than fail open.
 write={'tool_name':'Write','tool_input':{'file_path':'x'},'cwd':os.getcwd()}
 blocked=subprocess.run(['/bin/sh','-c',command],input=json.dumps(write),text=True,capture_output=True).returncode
 record={'tools':sys.argv[sys.argv.index('--tools')+1],'schema':sys.argv[sys.argv.index('--json-schema')+1],
-        'deny_write':settings['sandbox']['filesystem']['denyWrite'],'blocked':blocked,'prompt':prompt}
+        'deny_write':settings['sandbox']['filesystem']['denyWrite'],'blocked':blocked,'prompt':prompt,
+        'hook_timeout':hook.get('timeout')}
 open(sys.argv[0]+'.'+phase,'w').write(json.dumps(record))
 parts={'evaluate':{'evaluation':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}},
        'edit':{'edit':{'tests':['pytest: passed'],'tests_passed':True,'preexisting_failures':[],'summary':'s'}},
@@ -264,6 +266,8 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':parts[pha
     }
     assert len({(r["tools"], r["schema"]) for r in records.values()}) == 1
     assert all(r["blocked"] == 2 for r in records.values())
+    # A timed-out hook lets the tool run, so the turn's own timeout must end it first.
+    assert all(r["hook_timeout"] > config.review.worker_timeout for r in records.values())
     assert str(repo) in records["evaluate"]["deny_write"]
     assert str(repo) not in records["edit"]["deny_write"] + records["publish"]["deny_write"]
     assert "use only the Read, Glob and Grep tools" in records["evaluate"]["prompt"]
