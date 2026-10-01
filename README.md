@@ -43,7 +43,7 @@ flowchart LR
     Fix --> Review
 ```
 
-The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes (none with [`--substantial-only`](#what-happens-during-a-review)). The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
+The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes (none with [`--substantial-only`](#options)). The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
 
 ## Quick start
 
@@ -97,6 +97,27 @@ Or, for GitHub, let LXReview find the current branch's PR:
 
 The branch must be pushed to its upstream and have an open PR or MR that ChatGPT can open, because it reads the code on GitHub or GitLab. The command returns a run ID and follows progress in the same chat.
 
+### Options
+
+Options combine freely, except as noted for `--review-only`:
+
+```text
+/review-loop --chatgpt sol:high --max-passes 3 --substantial-only --push ask
+```
+
+| Option | Effect | Without it |
+| --- | --- | --- |
+| PR or MR URL | The PR or MR to review | The current branch's open GitHub PR; a GitLab MR needs its URL |
+| [`--chatgpt MODEL[:EFFORT]`](#choosing-models) | Reviewer model and reasoning level, e.g. `sol:high` or `:medium` | ChatGPT's current model, highest reasoning |
+| [`--claude MODEL[:EFFORT]`](#choosing-models) | Worker model and effort, e.g. `opus:xhigh` | Claude Code's own model and effort |
+| [`--max-passes N`](docs/CONFIGURATION.md#pass-limits-and-timeouts) | At most N review passes, 1 to 20 | 5 |
+| [`--commit ask`](#approving-commits-and-pushes) | Wait for your approval before each commit | Commits automatically |
+| [`--push ask`](#approving-commits-and-pushes) | Wait for your approval before each push | Pushes automatically |
+| [`--substantial-only`](docs/CONFIGURATION.md#substantial-findings-only) | Fix only what ChatGPT classifies as substantial; non-blocking findings are left alone | Useful non-blocking findings are fixed too |
+| [`--review-only`](#review-only) | One review whose accepted findings become a pending GitHub review; nothing is committed or pushed. GitHub only; not with `--max-passes`, `--commit` or `--push` | Findings are fixed, committed and pushed |
+
+In a terminal, `lxreview run <URL> --repo <path>` takes the same options; the URL is required there. The defaults for models, passes, commits and pushes can be changed for every run in [Configuration](docs/CONFIGURATION.md).
+
 ## What happens during a review?
 
 1. ChatGPT independently reviews the current PR in a fresh Temporary Chat.
@@ -104,9 +125,7 @@ The branch must be pushed to its upstream and have an open PR or MR that ChatGPT
 3. Claude runs the project's relevant checks on the unchanged code, implements accepted fixes, then checks again.
 4. Claude commits the fixes; LXReview pushes them and asks ChatGPT to review the updated PR. Either step can [wait for your approval](#approving-commits-and-pushes).
 
-These steps repeat until a review leaves no accepted substantial finding, for at most 5 passes. Change the limit for one run with `/review-loop --max-passes 3` (1 to 20), or for every run with [`max_passes`](docs/CONFIGURATION.md#pass-limits-and-timeouts).
-
-To fix only what ChatGPT classifies as substantial, add `--substantial-only`: non-blocking findings are then left alone, and a review with nothing else finishes the run as clean.
+These steps repeat until a review leaves no accepted substantial finding, for at most 5 passes unless you [choose another limit](#options).
 
 New check failures block publication. Pre-existing failures and checks that cannot run are reported. See [review decisions and verification](docs/OPERATIONS.md#review-decisions-and-verification) for the detailed policy.
 
