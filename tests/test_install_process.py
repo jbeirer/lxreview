@@ -191,7 +191,7 @@ def test_loop_and_watch_commands_follow_the_run_in_the_chat(paths, tmp_path, mon
     assert "Do not ask the user" in loop and "--chatgpt MODEL[:EFFORT]" in loop
     assert "output's `message` value, copied exactly" in loop
     assert "Follow the run" not in (commands / "review-status.md").read_text()
-    assert "[--max-passes N] [--commit ask] [--push ask]" in loop
+    assert "[--max-passes N] [--commit ask] [--push ask] [--substantial-only]" in loop
     assert "only after the user explicitly approves" in loop
     approve = (commands / "review-approve.md").read_text()
     assert "approve <run-id> <step>" in approve and "commit or push" in approve

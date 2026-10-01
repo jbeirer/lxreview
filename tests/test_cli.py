@@ -850,7 +850,22 @@ def test_a_fix_run_keeps_its_preflight(checkout, paths, tmp_path):
     assert result.exit_code == 0, result.output
     started = json.loads(result.stdout)
     assert calls == ["preflight", "run-" + started["run_id"]]
-    assert RunStore(paths, started["run_id"]).load()["review_only"] is False
+    state = RunStore(paths, started["run_id"]).load()
+    assert state["review_only"] is False and state["substantial_only"] is False
+    assert "Findings:" not in started["message"]
+
+
+def test_a_substantial_only_run_says_so_when_it_starts(checkout, paths, tmp_path):
+    from lxreview.runs import RunStore
+
+    result = runner.invoke(app, ["run", PR, "--repo", str(tmp_path), "--substantial-only"])
+    assert result.exit_code == 0, result.output
+    started = json.loads(result.stdout)
+    assert RunStore(paths, started["run_id"]).load()["substantial_only"] is True
+    assert (
+        "- Findings: substantial only; non-blocking findings are left alone\n"
+        "- Commits and pushes: automatic\n" in started["message"]
+    )
 
 
 @pytest.mark.parametrize(

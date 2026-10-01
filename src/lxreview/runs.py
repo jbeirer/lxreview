@@ -42,6 +42,7 @@ class RunStore:
         max_passes: int,
         audit: Path,
         review_only: bool = False,
+        substantial_only: bool = False,
     ):
         run_id = datetime.now(UTC).strftime("lr-%Y%m%d-%H%M%S-") + secrets.token_hex(4)
         store = cls(paths, run_id)
@@ -64,6 +65,8 @@ class RunStore:
                 "completed_pass": 0,
                 # Accepted findings become a pending GitHub review; nothing is committed.
                 "review_only": review_only,
+                # Non-blocking findings are neither evaluated nor fixed (nor commented on).
+                "substantial_only": substantial_only,
             }
         )
         for filename in ("stdout.log", "stderr.log", "events.jsonl", "claude-session-id"):

@@ -521,6 +521,36 @@ async def test_final_pass_reports_polish_instead_of_editing(paths, tmp_path, mon
     assert '"polish_skipped"' in events and '"N1"' in events
 
 
+async def test_a_substantial_only_run_leaves_non_blocking_findings_alone(
+    paths, tmp_path, monkeypatch
+):
+    from lxreview.timeline import describe
+
+    monkeypatch.setattr("lxreview.worker.Repository", Repo)
+    Repo.head_value = "a" * 40
+    store = create(paths, tmp_path)
+    store.update(substantial_only=True)
+    prompts = []
+    reviewer = Reviewer(
+        [
+            "SUBSTANTIAL [S1] bug\nNON_BLOCKING [N1] misleading error text\nVERDICT: SUBSTANTIAL_ISSUES",
+            "NON_BLOCKING [N1] missing test\nVERDICT: CLEAN",
+        ]
+    )
+    await execute(paths, Config(), store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    # Only S1 is weighed and fixed; the second review's polish ends the run without a turn.
+    assert "repository: S1." in prompts[0] and '"finding": "N1"' not in prompts[1]
+    assert len(prompts) == 3 and len(reviewer.requests) == 2
+    assert store.load()["status"] == "CLEAN" and not store.load().get("polish_pass")
+    events = [
+        json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
+    ]
+    ignored = [e for e in events if e["kind"] == "non_blocking_ignored"]
+    assert [(e["pass_number"], e["findings"]) for e in ignored] == [(1, ["N1"]), (2, ["N1"])]
+    (line,) = describe(ignored[0])
+    assert line.endswith("  Non-blocking findings left unevaluated (substantial-only run): N1")
+
+
 class PushRecorder(Repo):
     pushed: list[str] = []
 
@@ -861,6 +891,25 @@ async def test_an_anchor_that_is_not_in_the_file_goes_to_the_summary_without_a_l
     (payload,) = github["posted"]
     # Without a valid anchor, the reviewer's title names the finding instead.
     assert payload["comments"] == [] and payload["body"] == "**off by one**\n\nFix it."
+
+
+async def test_a_substantial_only_review_comments_on_substantial_findings_alone(
+    paths, tmp_path, github
+):
+    store = review_only(paths, tmp_path)
+    store.update(substantial_only=True)
+    prompts: list[str] = []
+    reviewer = Reviewer(
+        ["SUBSTANTIAL [S1] off by one\nNON_BLOCKING [N1] unclear name\nVERDICT: SUBSTANTIAL_ISSUES"]
+    )
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Stop at the last bin.")
+    await execute(
+        paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment], prompts)
+    )
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert "repository: S1." in prompts[0]
+    (payload,) = github["posted"]
+    assert [c["body"] for c in payload["comments"]] == ["Stop at the last bin."]
 
 
 async def test_review_only_posts_nothing_for_a_clean_review(paths, tmp_path, github):

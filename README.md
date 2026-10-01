@@ -43,7 +43,7 @@ flowchart LR
     Fix --> Review
 ```
 
-The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes. The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
+The loop finishes when no accepted substantial issues remain, with at most one extra pass of non-blocking fixes (none with [`--substantial-only`](#what-happens-during-a-review)). The final pass reports remaining issues without making edits that would go unreviewed; errors stop the run rather than count as success.
 
 ## Quick start
 
@@ -105,6 +105,8 @@ The branch must be pushed to its upstream and have an open PR or MR that ChatGPT
 4. Claude commits the fixes; LXReview pushes them and asks ChatGPT to review the updated PR. Either step can [wait for your approval](#approving-commits-and-pushes).
 
 These steps repeat until a review leaves no accepted substantial finding, for at most 5 passes. Change the limit for one run with `/review-loop --max-passes 3` (1 to 20), or for every run with [`max_passes`](docs/CONFIGURATION.md#pass-limits-and-timeouts).
+
+To fix only what ChatGPT classifies as substantial, add `--substantial-only`: non-blocking findings are then left alone, and a review with nothing else finishes the run as clean.
 
 New check failures block publication. Pre-existing failures and checks that cannot run are reported. See [review decisions and verification](docs/OPERATIONS.md#review-decisions-and-verification) for the detailed policy.
 

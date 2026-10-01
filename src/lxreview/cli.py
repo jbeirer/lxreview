@@ -377,6 +377,11 @@ def start_run(
         "--review-only",
         help="Add accepted findings to a pending GitHub review instead of fixing them.",
     ),
+    substantial_only: bool = typer.Option(
+        False,
+        "--substantial-only",
+        help="Consider only substantial findings; leave non-blocking ones alone.",
+    ),
 ):
     """Start a detached review worker that fixes findings, or drafts a GitHub review."""
     from .contracts import ReviewRequest
@@ -416,6 +421,7 @@ def start_run(
                 maximum,
                 repository.audit_root(),
                 review_only=review_only,
+                substantial_only=substantial_only,
             )
             if choices:
                 store.update(choices=choices)
@@ -436,7 +442,9 @@ def start_run(
                 "status": "QUEUED",
                 "watch": watch,
                 **described,
-                "message": _announcement(store.id, target, described, watch, review_only),
+                "message": _announcement(
+                    store.id, target, described, watch, review_only, substantial_only
+                ),
             },
             True,
         )
@@ -489,7 +497,12 @@ def _refuse_while_active(paths: Paths, config: Config) -> None:
 
 
 def _announcement(
-    run_id: str, target: str, described: dict[str, str], watch: str, review_only: bool = False
+    run_id: str,
+    target: str,
+    described: dict[str, str],
+    watch: str,
+    review_only: bool = False,
+    substantial_only: bool = False,
 ) -> str:
     """What /review-loop tells the user once the run starts, ready to relay unchanged."""
     if review_only:
@@ -504,6 +517,8 @@ def _announcement(
             "reviews, each finding's decision and reason, commands, tests, commits",
         )
         outcome = f"- Commits and pushes: {described['publishing']}\n\n"
+    if substantial_only:
+        outcome = "- Findings: substantial only; non-blocking findings are left alone\n" + outcome
     return (
         f"Started {kind} `{run_id}` for {target}.\n"
         f"- Reviewer: {described['reviewer']}\n"

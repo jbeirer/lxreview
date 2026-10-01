@@ -48,6 +48,7 @@ Claude evaluates every substantial finding against the code and the PR or MR des
 | Accepted substantial finding | Fix, verify, commit, push (each after your approval when configured) and review again, if another pass remains |
 | Non-blocking finding | Accept only a small, useful change within the PR's scope; no speculative refactors or style-only changes |
 | Non-blocking fixes alone | At most one such fix pass per run, followed by independent review |
+| Non-blocking finding with `--substantial-only` | Not evaluated or fixed; the timeline lists it |
 | Final-pass accepted substantial finding | Finish as `MAX_PASSES`, without unreviewed edits |
 | Final-pass accepted non-blocking finding only | Report it without editing |
 | No accepted findings | Finish as `CLEAN` or `NO_VALID_SUBSTANTIAL_FINDINGS`, according to the review verdict |
@@ -72,7 +73,7 @@ A failed push leaves the commit locally and stops the run. Correct the underlyin
 `lxreview run <PR-URL> --review-only` (or `/review-loop <PR-URL> --review-only`) reviews a GitHub PR without changing the repository. The run has one pass:
 
 1. ChatGPT reviews the PR in a fresh Temporary Chat, as in a fix loop.
-2. Claude evaluates every finding, substantial or non-blocking, against the code and the PR discussion, in a read-only turn. A non-blocking finding is accepted only when it is a real, useful improvement within the PR's scope.
+2. Claude evaluates every finding, substantial or non-blocking, against the code and the PR discussion, in a read-only turn. A non-blocking finding is accepted only when it is a real, useful improvement within the PR's scope. With `--substantial-only`, non-blocking findings are not evaluated or posted.
 3. For each accepted finding, Claude writes one review comment anchored to the narrowest line range at the reviewed head, with a GitHub suggested change when the fix is local to those lines.
 4. LXReview creates one pending review on the PR with your `gh` login. Comments on lines in the PR's diff appear inline; the rest go into the review's summary with a link to the lines. If GitHub refuses an inline position, LXReview creates the review once more with every comment in the summary.
 

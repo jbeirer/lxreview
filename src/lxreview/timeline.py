@@ -165,6 +165,11 @@ def describe(
             "Accepted non-blocking findings left for you (no unreviewed final-pass edits): "
             + ", ".join(str(f) for f in event.get("findings", []))
         ]
+    elif kind == "non_blocking_ignored":
+        texts = [
+            "Non-blocking findings left unevaluated (substantial-only run): "
+            + ", ".join(str(f) for f in event.get("findings", []))
+        ]
     elif kind == "evaluation_complete":
         texts = [f"Evaluation: {event.get('accepted')} accepted, {event.get('rejected')} rejected"]
     elif kind == "discussion_read":
@@ -248,6 +253,7 @@ def style(text: str) -> str:
         ("Finished: NO_VALID_SUBSTANTIAL_FINDINGS", "bold green"),
         ("Finished: REVIEW_DRAFTED", "bold green"),
         ("Accepted non-blocking findings left", "yellow"),
+        ("Non-blocking findings left unevaluated", "dim"),
         ("Finished: MAX_PASSES", "bold yellow"),
         ("Finished: ", "bold red"),
         ("Claude turn failed", "red"),

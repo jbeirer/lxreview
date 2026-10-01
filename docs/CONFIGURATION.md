@@ -68,6 +68,10 @@ worker_timeout = 7200
 
 `--max-passes 3`, in `/review-loop` or in `lxreview run`, overrides the pass limit for a new run. `LXREVIEW_MAX_PASSES` overrides the configured limit; the CLI option takes precedence. See [Operations](OPERATIONS.md#review-decisions-and-verification) for final-pass behavior.
 
+## Substantial findings only
+
+`--substantial-only`, in `/review-loop` or in `lxreview run`, makes one run consider only the findings ChatGPT classifies as substantial. Non-blocking findings are not evaluated, fixed or, in a [review-only run](#review-only-runs), posted, so the run has no extra pass for non-blocking fixes, and a review with only non-blocking findings finishes it as `CLEAN`. The timeline lists the findings left alone. It is a per-run choice with no configuration setting, and a resumed run keeps it.
+
 ## Commits and pushes
 
 ```toml
@@ -91,7 +95,7 @@ Override either setting for one run with `--commit ask` or `--push ask`, in `/re
 lxreview run https://github.com/owner/repository/pull/123 --repo /path/to/repository --review-only
 ```
 
-It is a per-run choice with no configuration setting. The run is always a single pass, so it cannot be combined with `--max-passes`, and it never commits or pushes, so `--commit` and `--push` are refused too. `--chatgpt` and `--claude` work as usual. See [review-only runs](OPERATIONS.md#review-only-runs).
+It is a per-run choice with no configuration setting. The run is always a single pass, so it cannot be combined with `--max-passes`, and it never commits or pushes, so `--commit` and `--push` are refused too. `--chatgpt`, `--claude` and `--substantial-only` work as usual. See [review-only runs](OPERATIONS.md#review-only-runs).
 
 ## Verification environment
 

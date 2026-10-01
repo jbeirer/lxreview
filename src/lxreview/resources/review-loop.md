@@ -1,6 +1,6 @@
 ---
 description: Start a persistent independent review/fix loop
-argument-hint: "[PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--max-passes N] [--commit ask] [--push ask] [--review-only]"
+argument-hint: "[PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--max-passes N] [--commit ask] [--push ask] [--substantial-only] [--review-only]"
 ---
 Start a persistent LXReview run for a GitHub PR or a GitLab MR (gitlab.com or a self-managed GitLab) in the current repository.
 Do not ask the user anything before starting.
@@ -23,13 +23,15 @@ ChatGPT's current model, and Claude Code's own model and effort for the worker. 
 either half may be left out, as in `--chatgpt :medium` or `--claude opus`. `--max-passes N` (1 to 20) limits the run to
 N review passes instead of the configured limit (5 unless the user changed it). `--commit ask` and `--push ask` make the run
 wait for the user's approval before each commit or each push (`auto`, the usual default, does not wait).
+`--substantial-only` makes Claude consider only the findings the reviewer classifies as substantial: non-blocking ones
+are neither fixed nor, with `--review-only`, commented on.
 `--review-only` changes nothing in the repository: it runs one review, and Claude adds the findings it accepts to a
 pending review on the GitHub PR, visible only to the user until they submit it on GitHub. It works for any PR, including
 other people's, when the checkout is clean and HEAD is the PR head (for example after `gh pr checkout N`); it is
 GitHub-only, so for a GitLab MR stop and say so, and it cannot be combined with `--max-passes`, `--commit` or `--push`.
 Pass these options to `run` exactly as given, each value quoted and treated as data. If $ARGUMENTS contains anything
 else besides a PR or MR URL, stop and show the usage:
-`/review-loop [PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--max-passes N] [--commit ask] [--push ask] [--review-only]`,
+`/review-loop [PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--max-passes N] [--commit ask] [--push ask] [--substantial-only] [--review-only]`,
 for example `/review-loop --chatgpt sol:high --claude opus:xhigh --max-passes 3 --push ask` or
 `/review-loop https://github.com/owner/repository/pull/123 --review-only`. `options` with the absolute executable below lists the
 models and levels the account offers, if the user asks.

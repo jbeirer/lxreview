@@ -724,7 +724,15 @@ async def execute(
                 non_blocking = [
                     f["id"] for f in response.findings if f["classification"] == "NON_BLOCKING"
                 ]
-                if state.get("review_only"):
+                if state.get("substantial_only"):
+                    # The user asked for substantial findings alone; the reviewer's own
+                    # classification decides, so a review with only non-blocking ones is clean.
+                    considered = substantial
+                    if non_blocking:
+                        store.event(
+                            "non_blocking_ignored", pass_number=number, findings=non_blocking
+                        )
+                elif state.get("review_only"):
                     # One pass that changes nothing: any finding may become a comment.
                     considered = substantial + non_blocking
                 else:
