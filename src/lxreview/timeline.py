@@ -11,6 +11,7 @@ PHASES = {
     "publishing": "Claude committing and pushing",
     "awaiting_commit": "waiting for your approval to commit",
     "awaiting_push": "waiting for your approval to push",
+    "commenting": "drafting the GitHub review",
     "finished": "finished",
     "interrupted": "interrupted",
 }
@@ -200,6 +201,11 @@ def describe(
         texts = [f"Pushing commit {str(event.get('commit', ''))[:10]}"]
     elif kind == "fixes_pushed":
         texts = [f"Commit {str(event.get('commit', ''))[:10]} pushed"]
+    elif kind == "review_posted":
+        texts = [
+            f"Draft review created on GitHub: {event.get('inline', 0)} inline,"
+            f" {event.get('summary', 0)} in summary — {event.get('url', '')}; submit it there"
+        ]
     elif kind == "diff_capture_failed":
         texts = [f"Diff capture failed for pass {n}"]
     elif kind == "worker_output_invalid":
@@ -237,8 +243,10 @@ def style(text: str) -> str:
         ("  ", "dim"),
         ("Waiting for your approval", "bold yellow"),
         ("Commit ", "bold green"),
+        ("Draft review created", "bold green"),
         ("Finished: CLEAN", "bold green"),
         ("Finished: NO_VALID_SUBSTANTIAL_FINDINGS", "bold green"),
+        ("Finished: REVIEW_DRAFTED", "bold green"),
         ("Accepted non-blocking findings left", "yellow"),
         ("Finished: MAX_PASSES", "bold yellow"),
         ("Finished: ", "bold red"),

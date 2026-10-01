@@ -67,6 +67,33 @@ With `commit = "ask"` or `push = "ask"` ([configuration](CONFIGURATION.md#commit
 
 A failed push leaves the commit locally and stops the run. Correct the underlying problem and establish a clean, pushed checkpoint before resuming; do not disable the sandbox to work around a failure.
 
+### Review-only runs
+
+`lxreview run <PR-URL> --review-only` (or `/review-loop <PR-URL> --review-only`) reviews a GitHub PR without changing the repository. The run has one pass:
+
+1. ChatGPT reviews the PR in a fresh Temporary Chat, as in a fix loop.
+2. Claude evaluates every finding, substantial or non-blocking, against the code and the PR discussion, in a read-only turn. A non-blocking finding is accepted only when it is a real, useful improvement within the PR's scope.
+3. For each accepted finding, Claude writes one review comment anchored to the narrowest line range at the reviewed head, with a GitHub suggested change when the fix is local to those lines.
+4. LXReview creates one pending review on the PR with your `gh` login. Comments on lines in the PR's diff appear inline; the rest go into the review's summary with a link to the lines. If GitHub refuses an inline position, LXReview creates the review once more with every comment in the summary.
+
+A pending review is visible only to you until you submit it on GitHub, where you can edit or delete comments first, or discard it. LXReview never submits a review and never approves or requests changes. Rejected findings are not posted; `lxreview show <run-id>` shows every decision and the prepared review.
+
+| Outcome | Status |
+| --- | --- |
+| Pending review created | `REVIEW_DRAFTED`; the timeline links it |
+| Clean review without findings | `CLEAN`; nothing is posted |
+| No accepted findings | `CLEAN` or `NO_VALID_SUBSTANTIAL_FINDINGS`, according to the review verdict; nothing is posted |
+
+Requirements:
+
+- A GitHub PR. GitLab merge requests are refused, because LXReview reads them anonymously and creating a review needs a login.
+- A clean checkout whose HEAD is the PR head, for example after `gh pr checkout <number>` or `git fetch origin pull/<number>/head && git checkout FETCH_HEAD`. The branch, its upstream and push settings do not matter, so other people's PRs work. LXReview asks GitHub for the PR head before and after creating the review, and before it finishes a run that posts nothing, so a run whose PR moved on fails instead of finishing clean. If the PR head moves before the review is created, the run fails without posting; if it moves while the review is created, LXReview discards that review and the run fails.
+- No pending review of yours on the PR: GitHub allows one per person and PR, so `run` refuses until you submit or discard the existing one.
+- `gh` logged in as the account that should own the review, with permission to comment on the PR.
+- No `--max-passes`, `--commit` or `--push`: the run is always one pass and never commits or pushes.
+
+If creating the review fails in a way that leaves its outcome unknown, such as a timeout, LXReview does not retry. Check the PR on GitHub for a pending review before resuming; `resume` refuses while one exists, and a run that already created its review cannot be resumed.
+
 ## Host requirements
 
 The repository host can be any Linux machine where you run Claude Code: a remote server or cloud VM you reach over SSH, your own workstation, or a cluster login node. Linux workers require the Claude sandbox prerequisites, including `bwrap` and `socat`. For `host-browser`, the host also needs TigerVNC (`vncserver`, `vncpasswd`), Xfce (`startxfce4`) and `dbus-run-session`, plus the libraries needed by Chrome. Supervision uses systemd user services, or tmux in a systemd scope; a macOS workstation uses launchd. `lxreview doctor` checks readiness.
@@ -215,6 +242,8 @@ If you deleted the installation directory by hand, run `lxreview setup` again: i
 | "cannot be read without signing in" | The repository must be public; open the PR or MR in a private browser window to check. For GitLab, the upstream remote must also be on the same GitLab host |
 | Run or services belong to another host | Reconnect to the exact host listed in run/service status |
 | Resume refuses a dirty or unpushed checkout | Inspect the retained changes, resolve them and establish a clean, pushed checkpoint |
+| "You already have a pending review on this PR" | Submit or discard your pending review on GitHub, then start the review-only run again |
+| "Local HEAD is not the PR head" | Check out the PR's current head, for example with `gh pr checkout <number>`, for a review-only run |
 | Workstation connection expired | Repeat host/workstation pairing and keep the workstation awake |
 | Pairing reached a different host | Pass an SSH destination that always reaches the host that printed the code, with `pair --ssh` |
 | Browser UI automation fails | Inspect `doctor` output; UI changes can require an LXReview update |

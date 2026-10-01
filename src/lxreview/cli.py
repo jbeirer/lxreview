@@ -372,8 +372,13 @@ def start_run(
     claude: str = typer.Option("", help="Worker MODEL[:EFFORT] for this run, e.g. opus:xhigh."),
     commit: str = typer.Option("", help="auto, or ask to wait for approval before each commit."),
     push: str = typer.Option("", help="auto, or ask to wait for approval before each push."),
+    review_only: bool = typer.Option(
+        False,
+        "--review-only",
+        help="Add accepted findings to a pending GitHub review instead of fixing them.",
+    ),
 ):
-    """Start a detached autonomous Claude review/fix worker."""
+    """Start a detached review worker that fixes findings, or drafts a GitHub review."""
     from .contracts import ReviewRequest
     from .git import Repository
 
@@ -384,18 +389,34 @@ def start_run(
         repository = Repository(repo, paths)
         ReviewRequest(target=target, head_sha=repository.head())
         maximum = config.review.max_passes if max_passes is None else max_passes
+        if review_only:
+            _review_only_options(target, max_passes, commit, push)
+            maximum = 1
         if not 1 <= maximum <= 20:
             raise LXError(Category.CONFIG, "max-passes must be 1..20")
         if config.role != "host":
             raise LXError(Category.CONFIG, "Start review workers on the repository host")
         executable(config.runtime.claude)
         require_afs_token(paths, paths.root, repo)
-        identity = repository.preflight(target, settle=30)
+        if review_only:
+            identity = repository.review_checkpoint(target)
+        else:
+            identity = repository.preflight(target, settle=30)
         # Every pass reads the PR discussion; refuse now rather than after the first review.
         discussion.fetch(target, paths, config)
+        if review_only:
+            _refuse_pending_review(target, paths, config)
         with lock(repository.audit_root() / "start.lock"):
             _refuse_while_active(paths, config)
-            store = RunStore.create(paths, repo, target, identity, maximum, repository.audit_root())
+            store = RunStore.create(
+                paths,
+                repo,
+                target,
+                identity,
+                maximum,
+                repository.audit_root(),
+                review_only=review_only,
+            )
             if choices:
                 store.update(choices=choices)
             try:
@@ -407,7 +428,7 @@ def start_run(
             except Exception:
                 store.finish("FAILED", "Persistent worker could not start; run doctor")
                 raise
-        described = _described(chosen)
+        described = _described(chosen, review_only)
         watch = f"{_launcher(paths)} watch {store.id}"
         output(
             {
@@ -415,9 +436,40 @@ def start_run(
                 "status": "QUEUED",
                 "watch": watch,
                 **described,
-                "message": _announcement(store.id, target, described, watch),
+                "message": _announcement(store.id, target, described, watch, review_only),
             },
             True,
+        )
+
+
+def _review_only_options(target: str, max_passes: int | None, commit: str, push: str) -> None:
+    """A review-only run is one pass that posts a GitHub review and publishes nothing."""
+    from .forge import parse
+
+    if parse(target).kind != "github":
+        raise LXError(
+            Category.CONFIG,
+            "Review-only runs post GitHub review comments; GitLab merge requests are not supported",
+        )
+    if max_passes is not None:
+        raise LXError(Category.CONFIG, "A review-only run is a single pass; leave out --max-passes")
+    if commit or push:
+        raise LXError(
+            Category.CONFIG,
+            "A review-only run neither commits nor pushes; leave out --commit and --push",
+        )
+
+
+def _refuse_pending_review(target: str, paths: Paths, config: Config) -> None:
+    """GitHub allows one pending review per user and PR; a draft may also be left over from
+    an earlier run whose posting was interrupted."""
+    from . import comments
+    from .forge import parse
+
+    if existing := comments.pending_review(parse(target), paths, config):
+        raise LXError(
+            Category.UNSAFE,
+            f"You already have a pending review on this PR: {existing}; submit or discard it first",
         )
 
 
@@ -436,22 +488,35 @@ def _refuse_while_active(paths: Paths, config: Config) -> None:
             )
 
 
-def _announcement(run_id: str, target: str, described: dict[str, str], watch: str) -> str:
+def _announcement(
+    run_id: str, target: str, described: dict[str, str], watch: str, review_only: bool = False
+) -> str:
     """What /review-loop tells the user once the run starts, ready to relay unchanged."""
+    if review_only:
+        kind, steps = "review-only run", "the review, each finding's decision and reason"
+        outcome = (
+            "- Accepted findings will be added to a pending review on the PR, visible only to"
+            " you until you submit it. Nothing in the repository changes.\n\n"
+        )
+    else:
+        kind, steps = (
+            "review run",
+            "reviews, each finding's decision and reason, commands, tests, commits",
+        )
+        outcome = f"- Commits and pushes: {described['publishing']}\n\n"
     return (
-        f"Started review run `{run_id}` for {target}.\n"
+        f"Started {kind} `{run_id}` for {target}.\n"
         f"- Reviewer: {described['reviewer']}\n"
         f"- Worker: {described['worker']}\n"
-        f"- Commits and pushes: {described['publishing']}\n\n"
-        f"It runs in the background, so closing this chat does not stop it; `/review-stop {run_id}` does.\n"
-        "To follow every step in full in a terminal (reviews, each finding's decision and reason,"
-        " commands, tests, commits):\n\n"
+        + outcome
+        + f"It runs in the background, so closing this chat does not stop it; `/review-stop {run_id}` does.\n"
+        f"To follow every step in full in a terminal ({steps}):\n\n"
         f"```bash\n{watch}\n```\n\n"
         "I'll relay the updates here as they arrive."
     )
 
 
-def _described(config: Config) -> dict[str, str]:
+def _described(config: Config, review_only: bool = False) -> dict[str, str]:
     """The run's reviewer and worker choices in words, for people rather than parsers."""
     reviewer, worker = config.reviewer, config.worker
     chatgpt = "current model" if reviewer.model == "default" else reviewer.model
@@ -460,12 +525,16 @@ def _described(config: Config) -> dict[str, str]:
     else:
         model = "default model" if worker.model == "default" else worker.model
         claude = f"Claude ({model}), {worker.effort} effort"
-    publishing = {
-        ("auto", "auto"): "automatic",
-        ("auto", "ask"): "commits automatically, pushes after your approval",
-        ("ask", "auto"): "commits after your approval, then pushes automatically",
-        ("ask", "ask"): "each after your approval",
-    }[config.publish.commit, config.publish.push]
+    publishing = (
+        "none; accepted findings go to a pending GitHub review"
+        if review_only
+        else {
+            ("auto", "auto"): "automatic",
+            ("auto", "ask"): "commits automatically, pushes after your approval",
+            ("ask", "auto"): "commits after your approval, then pushes automatically",
+            ("ask", "ask"): "each after your approval",
+        }[config.publish.commit, config.publish.push]
+    )
     return {
         "reviewer": f"ChatGPT ({chatgpt}), {reviewer.reasoning_effort} reasoning",
         "worker": claude,
@@ -503,9 +572,24 @@ def resume(run_id: str):
         _refuse_while_active(paths, config)
         require_afs_token(paths, paths.root, Path(state["repo"]))
         repo = Repository(Path(state["repo"]), paths)
-        repo.verify_identity(state["identity"])
-        repo.preflight(state["target"])
+        if state.get("review_only"):
+            if state["completed_pass"]:
+                raise LXError(Category.UNSAFE, "This review-only run already created its review")
+            # A worker stopped after posting but before recording its pass leaves this behind.
+            posted = Path(state["audit"]) / "pass-01/review-posted.json"
+            if posted.exists():
+                url = json.loads(posted.read_text()).get("html_url", "")
+                raise LXError(
+                    Category.UNSAFE, f"This review-only run already created its review: {url}"
+                )
+            repo.review_checkpoint(state["target"])
+        else:
+            repo.verify_identity(state["identity"])
+            repo.preflight(state["target"])
         discussion.fetch(state["target"], paths, config)
+        if state.get("review_only"):
+            # Also catches a review that an interrupted run created before it could record it.
+            _refuse_pending_review(state["target"], paths, config)
         incomplete = Path(state["audit"]) / f"pass-{state['completed_pass'] + 1:02}"
         if incomplete.exists():
             # Preserve the interrupted pass; new independent pass starts from verified pushed head.
@@ -587,6 +671,7 @@ def watch(
                     "RUNNING": "bold blue",
                     "CLEAN": "bold green",
                     "NO_VALID_SUBSTANTIAL_FINDINGS": "bold green",
+                    "REVIEW_DRAFTED": "bold green",
                     "QUEUED": "bold",
                 }.get(
                     state["status"],
@@ -703,6 +788,8 @@ def show(
             "diff.patch",
             "tests.log",
             "metadata.json",
+            "review-draft.json",
+            "review-posted.json",
         )
         if (directory / name).exists()
     }

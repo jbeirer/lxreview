@@ -17,6 +17,7 @@ TERMINAL = {
     "FAILED",
     "CANCELLED",
     "INTERRUPTED",
+    "REVIEW_DRAFTED",
 }
 
 
@@ -33,7 +34,14 @@ class RunStore:
 
     @classmethod
     def create(
-        cls, paths: Paths, repo: Path, target: str, identity: dict, max_passes: int, audit: Path
+        cls,
+        paths: Paths,
+        repo: Path,
+        target: str,
+        identity: dict,
+        max_passes: int,
+        audit: Path,
+        review_only: bool = False,
     ):
         run_id = datetime.now(UTC).strftime("lr-%Y%m%d-%H%M%S-") + secrets.token_hex(4)
         store = cls(paths, run_id)
@@ -54,6 +62,8 @@ class RunStore:
                 "created": now(),
                 "phase": "queued",
                 "completed_pass": 0,
+                # Accepted findings become a pending GitHub review; nothing is committed.
+                "review_only": review_only,
             }
         )
         for filename in ("stdout.log", "stderr.log", "events.jsonl", "claude-session-id"):
@@ -139,7 +149,7 @@ class RunStore:
         ]
         for directory in sorted(Path(state["audit"]).glob("pass-*")):
             lines += [f"## {directory.name}"]
-            for name in ("reviewer.json", "evaluation.json", "metadata.json"):
+            for name in ("reviewer.json", "evaluation.json", "metadata.json", "review-posted.json"):
                 path = directory / name
                 if path.exists():
                     data = json.loads(path.read_text())

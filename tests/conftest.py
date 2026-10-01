@@ -24,3 +24,9 @@ def pr_discussion(request, monkeypatch):
     if "forge" not in request.keywords:
         counts = {"comments": 0, "reviews": 0, "threads": 0, "unresolved": 0}
         monkeypatch.setattr("lxreview.discussion.fetch", lambda *a: (DISCUSSION, counts))
+
+    # Review comments go through gh; tests fake GitHub's answers instead.
+    def offline(argv, *args, **kwargs):
+        pytest.fail(f"Tests must not run gh: {argv}")
+
+    monkeypatch.setattr("lxreview.comments.run", offline)

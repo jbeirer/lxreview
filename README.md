@@ -124,6 +124,22 @@ When the run reaches that step, it pauses and the chat following it asks you. Yo
 
 `lxreview show <run-id> --pass <n>` shows the pass's findings, diff and checks. Declining stops the run and leaves the changes or the commit to you; to continue reviewing after you push it yourself, run `lxreview resume <run-id>`. Leave the checkout untouched while the run waits, because a commit must contain exactly the checked change. To make approval your default, see [Configuration](docs/CONFIGURATION.md#commits-and-pushes).
 
+## Review only
+
+To review a GitHub PR without changing anything, including someone else's PR, check out its head and add `--review-only`:
+
+```bash
+gh pr checkout 123
+```
+
+```text
+/review-loop https://github.com/owner/repository/pull/123 --review-only
+```
+
+ChatGPT reviews the PR once and Claude checks each finding against the code and the PR discussion. The findings Claude accepts become a **pending review** on the PR, created with your `gh` login: inline comments on the affected lines, with a suggested change where the fix is local, and a summary for anything outside the diff. Only you can see a pending review. Open the PR on GitHub to edit or delete comments, then submit or discard the review. LXReview never submits a review, approves or requests changes, and in this mode it neither commits nor pushes.
+
+Review-only runs support GitHub PRs, not GitLab merge requests. See [review-only runs](docs/OPERATIONS.md#review-only-runs) for details.
+
 ## Following and controlling a run
 
 **Closing the Claude chat does not stop the review run.** Watch it again from another conversation on the same host, or use the terminal. Ctrl-C in a terminal watch also stops only the watching.
