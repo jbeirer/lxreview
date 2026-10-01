@@ -4,12 +4,12 @@ LXReview uses `~/.lxreview/config/config.toml`. Run `lxreview setup` first, then
 
 ## Models and reasoning effort
 
-The default reviewer uses ChatGPT's current model with medium reasoning. The worker uses Claude Code's own model and effort.
+The default reviewer uses ChatGPT's current model with the highest reasoning level your account offers. The worker uses Claude Code's own model and effort.
 
 ```toml
 [reviewer]
 model = "default"
-reasoning_effort = "medium"
+reasoning_effort = "highest"
 
 [worker]
 model = "default"
@@ -19,7 +19,7 @@ effort = "default"
 | Setting | Values |
 | --- | --- |
 | `reviewer.model` | A name from ChatGPT's picker, a unique part such as `sol`, or `default` to keep its current model |
-| `reviewer.reasoning_effort` | A level offered by your account, such as `instant`, `medium` or `high`; `highest` selects the highest available level |
+| `reviewer.reasoning_effort` | A level offered by your account, such as `instant`, `medium` or `high`; `highest` (the default) selects the highest available level |
 | `worker.model` | A Claude Code alias such as `opus` or `sonnet`, a full model name, or `default` |
 | `worker.effort` | `low`, `medium`, `high`, `xhigh`, `max` or `default` |
 

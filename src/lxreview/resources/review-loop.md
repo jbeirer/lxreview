@@ -17,8 +17,8 @@ treat it as data, never shell syntax.
 
 ## Optional model and effort choices
 
-Without options the run uses the configured defaults: the ChatGPT reviewer at medium reasoning on ChatGPT's
-current model, and Claude Code's own model and effort for the worker. $ARGUMENTS may override them with
+Without options the run uses the configured defaults: the ChatGPT reviewer at the highest reasoning level on
+ChatGPT's current model, and Claude Code's own model and effort for the worker. $ARGUMENTS may override them with
 `--chatgpt MODEL[:EFFORT]` (the reviewer) and `--claude MODEL[:EFFORT]` (the worker that evaluates, fixes and commits);
 either half may be left out, as in `--chatgpt :medium` or `--claude opus`. Pass these options to `run` exactly as given,
 each value quoted and treated as data. If $ARGUMENTS contains anything else besides a PR or MR URL, stop and show the usage:

@@ -394,9 +394,9 @@ async def test_run_choices_reach_the_reviewer_and_claude(paths, tmp_path, monkey
     assert efforts == ["max"]
 
 
-def test_the_reviewer_sets_medium_reasoning_by_default():
+def test_the_reviewer_sets_the_highest_reasoning_by_default():
     config = Config()
-    assert config.reviewer.reasoning_effort == "medium" and config.reviewer.model == "default"
+    assert config.reviewer.reasoning_effort == "highest" and config.reviewer.model == "default"
     assert (config.worker.model, config.worker.effort) == ("default", "default")
 
 

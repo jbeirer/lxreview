@@ -24,7 +24,7 @@ class ReviewerConfig(Strict):
     # of its name, "sol") and a level your plan offers, such as instant, medium or high.
     # "highest" is the top level offered; model "default" keeps ChatGPT's current model.
     model: str = Field(default="default", pattern=MODEL_NAME)
-    reasoning_effort: str = Field(default="medium", pattern=EFFORT_NAME)
+    reasoning_effort: str = Field(default="highest", pattern=EFFORT_NAME)
 
     @field_validator("reasoning_effort")
     @classmethod

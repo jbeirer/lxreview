@@ -392,7 +392,7 @@ def test_options_are_read_live_and_fall_back_to_the_last_check_while_busy(paths,
     monkeypatch.setattr(backend, "browser", lambda paths, config: Browser())
     live = json.loads(runner.invoke(app, ["options", "--json"]).stdout)
     assert live["reviewer"]["live"] is True and live["reviewer"]["models"] == ["GPT-5.5"]
-    assert live["reviewer"]["configured"] == {"model": "default", "reasoning_effort": "medium"}
+    assert live["reviewer"]["configured"] == {"model": "default", "reasoning_effort": "highest"}
     assert "xhigh" in live["worker"]["efforts"] and "opus" in live["worker"]["models"]
     # A run's review owns the browser: report the last check instead of navigating away.
     with lock(paths.root / "state/reviewer.lock"):
@@ -565,7 +565,11 @@ def test_update_from_a_checkout_and_refusal_outside_uv_tools(update_calls, tmp_p
 @pytest.mark.parametrize(
     ("choices", "reviewer", "worker"),
     [
-        ({}, "ChatGPT (current model), medium reasoning", "Claude Code's default model and effort"),
+        (
+            {},
+            "ChatGPT (current model), highest reasoning",
+            "Claude Code's default model and effort",
+        ),
         (
             {"reviewer_model": "sol", "reviewer_effort": "high", "worker_model": "opus"},
             "ChatGPT (sol), high reasoning",
