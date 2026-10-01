@@ -743,7 +743,12 @@ DRAFT = "https://github.com/org/repo/pull/1#pullrequestreview-7"
 @pytest.fixture
 def github(monkeypatch):
     """A fake GitHub: the PR's diff, the user's pending review and the reviews posted."""
-    fake = {"ranges": {"src/parse.py": [range(10, 20)]}, "pending": None, "posted": []}
+    fake = {
+        "ranges": {"src/parse.py": [range(10, 20)]},
+        "pending": None,
+        "posted": [],
+        "discarded": [],
+    }
     monkeypatch.setattr("lxreview.worker.Repository", Drafting)
     monkeypatch.setattr(Drafting, "pr_head", "a" * 40)
     monkeypatch.setattr(Repo, "head_value", "a" * 40)
@@ -755,6 +760,9 @@ def github(monkeypatch):
         return {"id": 7, "html_url": DRAFT, "inline": len(payload["comments"])}
 
     monkeypatch.setattr("lxreview.comments.post", post)
+    monkeypatch.setattr(
+        "lxreview.comments.discard", lambda target, review, *a: fake["discarded"].append(review)
+    )
     return fake
 
 
@@ -912,6 +920,27 @@ async def test_a_pr_head_that_moved_gets_no_review(paths, tmp_path, github, monk
     state = store.load()
     assert state["status"] == "FAILED" and "not the PR head" in state["error"]
     assert not github["posted"] and state["completed_pass"] == 0
+    assert not (Path(state["audit"]) / "pass-01/review-posted.json").exists()
+
+
+async def test_a_pr_head_that_moved_during_creation_discards_the_review(
+    paths, tmp_path, github, monkeypatch
+):
+    store = review_only(paths, tmp_path)
+
+    def moved(target, payload, paths, config):
+        # The author pushes after the last check, while GitHub creates the review.
+        github["posted"].append(payload)
+        Drafting.pr_head = "b" * 40
+        return {"id": 7, "html_url": DRAFT, "inline": len(payload["comments"])}
+
+    monkeypatch.setattr("lxreview.comments.post", moved)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    state = store.load()
+    assert state["status"] == "FAILED" and "not the PR head" in state["error"]
+    assert [r["id"] for r in github["discarded"]] == [7] and state["completed_pass"] == 0
     assert not (Path(state["audit"]) / "pass-01/review-posted.json").exists()
 
 

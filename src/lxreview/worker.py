@@ -624,9 +624,15 @@ async def draft_review(
     if (store.directory / "cancel").exists():
         store.finish("CANCELLED")
         return
-    # The comments describe the reviewed head; a PR that moved meanwhile gets none.
+    # The comments describe the reviewed head; a PR that moved meanwhile gets none. GitHub
+    # accepts an older commit_id, so a move during creation discards the new review.
     unchanged(repo, state, head, "before the review was posted")
     posted = comments.post(target, payload, paths, config)
+    try:
+        unchanged(repo, state, head, "while the review was posted")
+    except LXError:
+        comments.discard(target, posted, paths, config)
+        raise
     write_json(pass_dir / "review-posted.json", posted)
     store.event(
         "review_posted",

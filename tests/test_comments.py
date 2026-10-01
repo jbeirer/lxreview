@@ -159,6 +159,59 @@ def test_moving_comments_into_the_body_keeps_the_existing_summary():
     )
 
 
+def test_a_body_over_the_limit_keeps_every_finding():
+    long = "Explain.\n" + "x" * (comments.LIMIT - 20)
+    off_diff = [comment(f"N{i}", "src/b.py", i, body=long) for i in range(1, 8)]
+    payload = comments.build(off_diff, {}, HEAD, TARGET, RANGES)
+    assert len(payload["body"]) <= comments.BODY_LIMIT
+    entries = payload["body"].split(comments.SEPARATOR)
+    assert [e.split("\n")[0] for e in entries] == [f"**src/b.py:{i}**" for i in range(1, 8)]
+    assert all("Explain." in e and e.endswith("(shortened)") for e in entries)
+
+
+def test_moving_comments_into_a_full_body_keeps_every_finding():
+    long = "Explain.\n" + "x" * (comments.LIMIT - 20)
+    payload = comments.build(
+        [comment(f"N{i}", "src/b.py", i, body=long) for i in range(1, 5)]
+        + [comment(f"S{i}", "src/a.py", 10 + i, body=long) for i in range(1, 5)],
+        {},
+        HEAD,
+        TARGET,
+        RANGES,
+    )
+    assert len(payload["comments"]) == 4 and len(payload["body"]) <= comments.BODY_LIMIT
+    moved = comments.in_body(payload, TARGET)
+    assert len(moved["body"]) <= comments.BODY_LIMIT
+    # The existing summary is kept whole, and every moved comment follows it.
+    assert moved["body"].startswith(payload["body"] + comments.SEPARATOR)
+    headings = [e.split("\n")[0] for e in moved["body"].split(comments.SEPARATOR)]
+    assert headings == [f"**src/b.py:{i}**" for i in range(1, 5)] + [
+        f"**src/a.py:{10 + i}**" for i in range(1, 5)
+    ]
+    assert moved["body"].count("Explain.") == 8
+
+
+def test_discard_deletes_the_pending_review(paths, gh):
+    calls, answers = gh
+    answers.append((0, ""))
+    comments.discard(TARGET, {"id": 99, "html_url": "https://x/r99"}, paths, Config())
+    assert calls[0]["argv"] == [
+        "/usr/bin/gh",
+        "api",
+        "-X",
+        "DELETE",
+        "repos/org/repo/pulls/7/reviews/99",
+    ]
+
+
+@pytest.mark.parametrize("answer", [(1, "{}"), subprocess.TimeoutExpired(["gh"], 120)])
+def test_a_review_that_could_not_be_discarded_is_named(paths, gh, answer):
+    _, answers = gh
+    answers.append(answer)
+    with pytest.raises(LXError, match="https://x/r99 could not be discarded"):
+        comments.discard(TARGET, {"id": 99, "html_url": "https://x/r99"}, paths, Config())
+
+
 ANCHOR_ERROR = json.dumps(
     {
         "message": "Unprocessable Entity",

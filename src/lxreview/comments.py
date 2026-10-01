@@ -20,6 +20,9 @@ from .security import redact
 # Characters per comment text, and for the whole review body (GitHub accepts 65536).
 LIMIT = 10_000
 BODY_LIMIT = 60_000
+# Between the review body's entries, and room for what cap adds to a shortened entry.
+SEPARATOR = "\n\n---\n\n"
+MARGIN = 100
 # The new-side start and length of a diff hunk; a missing length means one line.
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
 SUGGESTION = re.compile(r"(?m)^([ \t]*)(`{3,}|~{3,})[ \t]*suggestion\b[^\n]*$")
@@ -124,11 +127,31 @@ def entry(target: forge.Target, head: str, comment: dict, title: str) -> str:
     return f"**{comment['path']}:{lines}**\n{link}\n\n{text}"
 
 
+def shares(lengths: list[int], room: int) -> list[int]:
+    """Each length's share of room: the shortest keep theirs, the rest split what is left."""
+    allotted, left = [0] * len(lengths), room
+    order = sorted(range(len(lengths)), key=lambda i: lengths[i])
+    for done, i in enumerate(order):
+        allotted[i] = min(lengths[i], max(left, 0) // (len(order) - done))
+        left -= allotted[i]
+    return allotted
+
+
+def fit(entries: list[str], room: int) -> list[str]:
+    """Entries shortened so that, joined, they fit in room. The longest are shortened first,
+    so every finding keeps its heading and part of its text instead of being cut off."""
+    room -= len(SEPARATOR) * max(len(entries) - 1, 0)
+    return [
+        text if len(text) <= share else cap(text, max(share - MARGIN, 0))
+        for text, share in zip(entries, shares([len(text) for text in entries], room), strict=True)
+    ]
+
+
 def assemble(head: str, inline: list[dict], entries: list[str]) -> dict:
     """The review payload. It never has an event, so GitHub keeps the review pending."""
     payload: dict = {"commit_id": head, "comments": inline}
     if entries:
-        payload["body"] = cap("\n\n---\n\n".join(entries), BODY_LIMIT)
+        payload["body"] = cap(SEPARATOR.join(entries), BODY_LIMIT)
     return payload
 
 
@@ -163,15 +186,18 @@ def build(
         if start != end:
             placed.update(start_line=start, start_side="RIGHT")
         inline.append(placed)
-    return assemble(head, inline, entries)
+    # The body keeps room for the inline comments, which in_body may have to move there.
+    moved = [entry(target, head, comment, "") for comment in inline]
+    return assemble(head, inline, fit(entries + moved, BODY_LIMIT)[: len(entries)])
 
 
 def in_body(payload: dict, target: forge.Target) -> dict:
     """The same review with every inline comment moved into its body."""
     head = payload["commit_id"]
     entries = [payload["body"]] if payload.get("body") else []
-    entries += [entry(target, head, comment, "") for comment in payload["comments"]]
-    return assemble(head, [], entries)
+    room = BODY_LIMIT - sum(len(text) + len(SEPARATOR) for text in entries)
+    moved = [entry(target, head, comment, "") for comment in payload["comments"]]
+    return assemble(head, [], entries + fit(moved, room))
 
 
 def problem(stdout: str) -> str:
@@ -226,6 +252,25 @@ def create(target: forge.Target, payload: dict, paths: Paths, config: Config) ->
         raise LXError(
             Category.PROTOCOL, "GitHub's answer to the review was unreadable" + unknown
         ) from None
+
+
+def discard(target: forge.Target, review: dict, paths: Paths, config: Config) -> None:
+    """Delete a pending review LXReview created; refuses to pass silently when it cannot."""
+    command, env = gh(paths, config)
+    endpoint = f"repos/{target.project}/pulls/{target.number}/reviews/{review['id']}"
+    try:
+        result = run(
+            [command, "api", "-X", "DELETE", endpoint], paths, env=env, check=False, timeout=120
+        )
+        failed = bool(result.returncode)
+    except (OSError, subprocess.TimeoutExpired):
+        failed = True
+    if failed:
+        raise LXError(
+            Category.UNSAFE,
+            f"The checkout or PR head changed while the review was created, and its pending review"
+            f" {review['html_url']} could not be discarded; discard it on GitHub",
+        )
 
 
 def post(target: forge.Target, payload: dict, paths: Paths, config: Config) -> dict:
