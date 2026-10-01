@@ -1,0 +1,22 @@
+name: dependabot
+# Enables auto-merge on Dependabot pull requests, so GitHub merges them once the CI checks that
+# the main ruleset requires have passed. Playwright updates are left for a manual merge: its
+# version is pinned with the Chrome build and listed in THIRD_PARTY.md.
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'jbeirer/lxreview'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98
+      - if: ${{ !contains(steps.metadata.outputs.dependency-names, 'playwright') }}
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}
