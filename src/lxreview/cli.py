@@ -513,7 +513,8 @@ def resume(run_id: str):
                 incomplete.with_name(incomplete.name + "-interrupted-" + secrets.token_hex(3))
             )
         (store.directory / "cancel").unlink(missing_ok=True)
-        store.update(status="QUEUED", error="")
+        # An interrupted worker may have left its approval request behind.
+        store.update(status="QUEUED", error="", awaiting=None, approved=None)
         store.event("resumed", checkpoint=state["completed_pass"])
         try:
             Supervisor(paths, config).start(

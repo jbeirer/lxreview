@@ -89,7 +89,8 @@ class RunStore:
         or stale approval from letting a later step through."""
         with lock(self.directory / "state.lock", blocking=True):
             state = self.load()
-            awaiting = state.get("awaiting") if state["status"] not in TERMINAL else None
+            stopping = state["status"] in TERMINAL or (self.directory / "cancel").exists()
+            awaiting = None if stopping else state.get("awaiting")
             if awaiting != step:
                 raise LXError(
                     Category.UNSAFE,
@@ -149,6 +150,9 @@ class RunStore:
         return "\n".join(lines) + "\n"
 
     def finish(self, status: str, error: str = "") -> None:
-        state = self.update(status=status, phase="finished", error=redact(error))
+        # A worker killed while it waits cannot withdraw its approval request itself.
+        state = self.update(
+            status=status, phase="finished", error=redact(error), awaiting=None, approved=None
+        )
         self.event("run_finished", status=state["status"], error=error)
         atomic_write(Path(state["audit"]) / "summary.md", self.report())

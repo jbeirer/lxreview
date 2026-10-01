@@ -640,7 +640,9 @@ def test_approve_names_the_step_the_run_waits_for(paths, tmp_path, monkeypatch):
     result = runner.invoke(app, ["approve", store.id, "push"])
     assert result.exit_code == 0 and f"Approved the push for {store.id}" in result.output
     assert store.load()["approved"] == "push"
+    # A stop that kills the waiting worker withdraws its request, so a resumed run starts clean.
     store.finish("CANCELLED")
+    assert store.load()["awaiting"] is None and store.load()["approved"] is None
     result = runner.invoke(app, ["approve", store.id, "push"])
     assert "is not waiting for approval to push" in str(result.exception)
 

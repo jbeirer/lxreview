@@ -269,29 +269,42 @@ def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):
         repository.preflight("https://gitlab.com/org/repo/-/merge_requests/12")
 
 
-def test_worktree_fingerprint_sees_every_uncommitted_change(repo):
+def test_worktree_tree_sees_every_uncommitted_change(repo):
     repository, git = repo
     (repository.path / "tracked.txt").write_text("one\n")
     (repository.path / ".gitignore").write_text("*.log\n")
     git("add", "tracked.txt", ".gitignore")
     git("commit", "-m", "tracked")
-    clean = repository.worktree_fingerprint()
+    clean = repository.worktree_tree()
+    assert clean == repository.tree("HEAD")
     (repository.path / "build.log").write_text("ignored output")
-    assert repository.worktree_fingerprint() == clean
+    assert repository.worktree_tree() == clean
     (repository.path / "tracked.txt").write_text("two\n")
-    edited = repository.worktree_fingerprint()
+    edited = repository.worktree_tree()
     assert edited != clean
     git("add", "tracked.txt")
-    assert repository.worktree_fingerprint() == edited
+    assert repository.worktree_tree() == edited
     new = repository.path / "new.py"
     new.write_text("a = 1\n")
-    added = repository.worktree_fingerprint()
+    added = repository.worktree_tree()
     assert added != edited
+    # Building the tree leaves the real index alone.
+    assert "?? new.py" in git("status", "--porcelain").splitlines()
     new.write_text("a = 2\n")
-    assert repository.worktree_fingerprint() != added
+    assert repository.worktree_tree() != added
+    new.write_text("a = 1\n")
+    new.chmod(0o755)
+    assert repository.worktree_tree() != added
+    new.unlink()
+    new.symlink_to("a = 1\n")
+    assert repository.worktree_tree() != added
     new.unlink()
     git("checkout", "HEAD", "--", "tracked.txt")
-    assert repository.worktree_fingerprint() == clean
+    assert repository.worktree_tree() == clean
+    new.write_text("a = 1\n")
+    git("add", "--all")
+    git("commit", "-m", "everything")
+    assert repository.tree("HEAD") == repository.worktree_tree()
 
 
 def test_sandbox_placeholders_stay_out_of_git_status_only_during_a_run(repo):

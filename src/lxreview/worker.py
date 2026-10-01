@@ -379,10 +379,13 @@ async def await_approval(store: RunStore, step: str, number: int, **detail) -> b
     store.update(phase=f"awaiting_{step}", awaiting=step, approved=None)
     store.event("approval_requested", pass_number=number, run_id=store.id, step=step, **detail)
     try:
-        while store.load().get("approved") != step:
-            if (store.directory / "cancel").exists():
-                return False
+        # A stop wins over an approval recorded in the same poll interval.
+        while not (store.directory / "cancel").exists():
+            if store.load().get("approved") == step:
+                break
             await asyncio.sleep(APPROVAL_POLL)
+        else:
+            return False
     finally:
         # A stopped run must not leave a stale request that a resumed run could approve.
         store.update(awaiting=None, approved=None)
@@ -604,11 +607,16 @@ async def execute(
                     # Preserve edits even when the Claude process fails or is cancelled.
                     try:
                         repo.verify_identity(state["identity"])
+                        # Untracked files belong to the change, as they do in the commit.
                         atomic_write(
                             pass_dir / "diff.patch",
                             redact(
                                 repo.call(
-                                    "diff", "--no-ext-diff", "--no-textconv", identity["head"]
+                                    "diff",
+                                    "--no-ext-diff",
+                                    "--no-textconv",
+                                    identity["head"],
+                                    repo.worktree_tree(),
                                 )
                             ),
                         )
@@ -634,24 +642,23 @@ async def execute(
                     raise LXError(Category.UNSAFE, "HEAD changed during the edit/test phase")
                 if config.publish.commit == "ask":
                     # The commit must hold exactly the checked change.
-                    checked = repo.worktree_fingerprint()
-                    changed = sorted(
-                        {
-                            *repo.call("diff", "--name-only", "HEAD").splitlines(),
-                            *repo.call("ls-files", "--others", "--exclude-standard").splitlines(),
-                        }
-                    )
+                    checked = repo.worktree_tree()
+                    changed = repo.call(
+                        "diff", "--name-only", "--no-renames", identity["head"], checked
+                    ).splitlines()
                     if not await await_approval(store, "commit", number, files=changed):
                         store.finish("CANCELLED")
                         return
                     repo.verify_identity(state["identity"])
                     if repo.head() != identity["head"]:
                         raise LXError(Category.UNSAFE, "HEAD changed while waiting for approval")
-                    if repo.worktree_fingerprint() != checked:
+                    if repo.worktree_tree() != checked:
                         raise LXError(
                             Category.UNSAFE, "The working tree changed while waiting for approval"
                         )
-                store.update(phase="publishing")
+                if store.update(phase="publishing")["status"] == "CANCELLED":
+                    store.finish("CANCELLED")
+                    return
                 published = await turn(
                     paths,
                     config,
@@ -661,6 +668,12 @@ async def execute(
                     read_only=False,
                 )
                 assert isinstance(published, PublishResult)
+                if config.publish.commit == "ask" and repo.tree(published.commit) != checked:
+                    raise LXError(
+                        Category.UNSAFE,
+                        f"Commit {published.commit[:10]} differs from the approved change;"
+                        " it exists only locally",
+                    )
                 if config.publish.push == "ask":
                     subject = repo.call("log", "-1", "--format=%s", published.commit)
                     if not await await_approval(
@@ -669,7 +682,9 @@ async def execute(
                         store.finish("CANCELLED")
                         return
                     repo.verify_identity(state["identity"])
-                    store.update(phase="publishing")
+                    if store.update(phase="publishing")["status"] == "CANCELLED":
+                        store.finish("CANCELLED")
+                        return
                 store.event("push_started", commit=published.commit)
                 pushed = repo.publish(
                     published.commit,

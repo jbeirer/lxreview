@@ -39,10 +39,14 @@ class Repo:
     def head(self):
         return self.head_value
 
-    fingerprint = "checked tree"
+    worktree = "checked tree"
+    committed: str | None = None
 
-    def worktree_fingerprint(self):
-        return self.fingerprint
+    def worktree_tree(self):
+        return self.worktree
+
+    def tree(self, commit):
+        return self.committed or self.worktree
 
     def call(self, *args):
         return "diff --git a/file b/file\n+fix"
@@ -598,10 +602,55 @@ async def test_a_commit_holds_exactly_the_checked_change(paths, tmp_path, waitin
         execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
     )
     await approval_requested(store, "commit")
-    monkeypatch.setattr(Repo, "fingerprint", "edited while waiting")
+    monkeypatch.setattr(Repo, "worktree", "edited while waiting")
     store.approve("commit")
     await run
     state = store.load()
     assert state["status"] == "FAILED"
     assert "working tree changed while waiting for approval" in state["error"]
     assert len(prompts) == 2 and not PushRecorder.pushed
+
+
+async def test_a_commit_that_differs_from_the_approval_is_never_pushed(
+    paths, tmp_path, waiting, monkeypatch
+):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    config = Config().with_choices({"commit": "ask"})
+    run = asyncio.create_task(
+        execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    )
+    await approval_requested(store, "commit")
+    # For example a commit hook that changes and stages files during the commit turn.
+    monkeypatch.setattr(Repo, "committed", "changed by a hook")
+    store.approve("commit")
+    await run
+    state = store.load()
+    assert state["status"] == "FAILED" and "differs from the approved change" in state["error"]
+    assert len(prompts) == 3 and not PushRecorder.pushed
+
+
+@pytest.mark.parametrize(("step", "turns"), [("commit", 2), ("push", 3)])
+async def test_a_stop_wins_over_an_approval_in_the_same_poll(
+    paths, tmp_path, waiting, monkeypatch, step, turns
+):
+    monkeypatch.setattr("lxreview.worker.APPROVAL_POLL", 0.2)
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    config = Config().with_choices({step: "ask"})
+    run = asyncio.create_task(
+        execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    )
+    await approval_requested(store, step)
+    # Both land before the sleeping worker polls again.
+    store.approve(step)
+    (store.directory / "cancel").touch()
+    with pytest.raises(LXError, match="not waiting for approval"):
+        store.approve(step)
+    await run
+    state = store.load()
+    assert state["status"] == "CANCELLED" and state["awaiting"] is None
+    assert len(prompts) == turns and not PushRecorder.pushed
+    assert "approval_granted" not in kinds(store)

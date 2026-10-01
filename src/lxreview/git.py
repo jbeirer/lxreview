@@ -1,6 +1,5 @@
-import hashlib
-import os
 import re
+import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -103,17 +102,18 @@ class Repository:
     def head(self) -> str:
         return self.call("rev-parse", "HEAD")
 
-    def worktree_fingerprint(self) -> str:
-        """A digest of every uncommitted change: tracked edits and untracked, non-ignored files."""
-        digest = hashlib.sha256(
-            self.call("diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD").encode()
-        )
-        untracked = self.call("ls-files", "--others", "--exclude-standard", "-z").split("\0")
-        for name in sorted(filter(None, untracked)):
-            path = self.path / name
-            digest.update(name.encode() + b"\0")
-            digest.update(os.readlink(path).encode() if path.is_symlink() else path.read_bytes())
-        return digest.hexdigest()
+    def worktree_tree(self) -> str:
+        """The Git tree a commit of every uncommitted change would hold: tracked edits and
+        untracked, non-ignored files with their modes and types. It is built in a temporary
+        index, so the real index stays untouched."""
+        with tempfile.TemporaryDirectory() as scratch:
+            env = {**process.environment(self.paths), "GIT_INDEX_FILE": f"{scratch}/index"}
+            self.call("read-tree", "HEAD", env=env)
+            self.call("add", "--all", env=env)
+            return self.call("write-tree", env=env)
+
+    def tree(self, commit: str) -> str:
+        return self.call("rev-parse", f"{commit}^{{tree}}")
 
     def audit_root(self) -> Path:
         return (
