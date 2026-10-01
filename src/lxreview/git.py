@@ -213,7 +213,8 @@ class Repository:
                 env=env,
             )
             commit = self.head()
-        _, remote, refspec = self.push_command()[1:]
+        command = self.push_command(commit, base)
+        remote = command[-2]
         try:
             if self._lfs() and self.call("lfs", "ls-files", "--name-only"):
                 run(
@@ -224,7 +225,7 @@ class Repository:
                     env=env,
                 )
             run(
-                [self.git, "push", "--no-verify", remote, refspec],
+                [self.git, "push", "--no-verify", *command[2:]],
                 self.paths,
                 cwd=self.path,
                 timeout=600,
@@ -242,14 +243,23 @@ class Repository:
         attributes = self.path / ".gitattributes"
         return attributes.is_file() and "filter=lfs" in attributes.read_text(errors="replace")
 
-    def push_command(self) -> list[str]:
-        """The only push the worker may run: the current branch to its upstream, by refspec.
+    def push_command(self, commit: str, base: str) -> list[str]:
+        """The only push LXReview runs: commit to the upstream branch, by refspec.
 
         An explicit refspec pushes exactly one branch whatever push.default or
-        remote.*.push say, so no user Git configuration has to change.
+        remote.*.push say, so no user Git configuration has to change. Naming the commit
+        rather than HEAD pushes what was checked even if HEAD moves meanwhile, and the
+        lease fails the push when the branch no longer holds base, for example after it
+        was deleted or reset while the run waited for approval.
         """
         remote, ref = self.call("rev-parse", "--abbrev-ref", "@{upstream}").split("/", 1)
-        return ["git", "push", remote, f"HEAD:refs/heads/{ref}"]
+        return [
+            "git",
+            "push",
+            f"--force-with-lease=refs/heads/{ref}:{base}",
+            remote,
+            f"{commit}:refs/heads/{ref}",
+        ]
 
     def preflight(self, target: str, *, settle: float = 0) -> dict:
         """Verify the review checkpoint; wait up to `settle` s for the PR/MR ref to catch up."""

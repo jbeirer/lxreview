@@ -51,7 +51,13 @@ def push(command, repository):
 def test_the_worker_never_pushes_itself(repo):
     repository, _ = repo
     repository.check_push_policy()
-    assert repository.push_command() == ["git", "push", "origin", "HEAD:refs/heads/feature"]
+    assert repository.push_command("c" * 40, "b" * 40) == [
+        "git",
+        "push",
+        f"--force-with-lease=refs/heads/feature:{'b' * 40}",
+        "origin",
+        f"{'c' * 40}:refs/heads/feature",
+    ]
     for command in (
         "git push origin HEAD:refs/heads/feature",
         "git push",
@@ -87,6 +93,49 @@ def test_publish_pushes_exactly_the_one_worker_commit(repo, remote, paths):
         check=True,
     ).stdout.strip()
     assert pushed == commit
+
+
+def test_publish_pushes_the_commit_even_when_head_moves(repo, remote, paths, monkeypatch):
+    from lxreview import process
+
+    repository, git = repo
+    base = repository.head()
+    (repository.path / "fix.py").write_text("fixed = True\n")
+    git("add", "fix.py")
+    git("commit", "-q", "-m", "Fix it")
+    commit = repository.head()
+    check = repository.check_push_policy
+
+    def moved():
+        # Another process commits after publish() validated HEAD.
+        check()
+        git("commit", "-q", "--allow-empty", "-m", "Unchecked")
+
+    monkeypatch.setattr(repository, "check_push_policy", moved)
+    assert repository.publish(commit, base, process.environment(paths)) == commit
+    assert git("ls-remote", "origin", "refs/heads/feature").split()[0] == commit
+
+
+@pytest.mark.parametrize("change", ["deleted", "reset"])
+def test_publish_fails_when_the_upstream_changed_while_waiting(repo, remote, paths, change):
+    from lxreview import process
+
+    repository, git = repo
+    older = repository.head()
+    git("commit", "-q", "--allow-empty", "-m", "Reviewed")
+    git("push", "-q", "origin", "HEAD:refs/heads/feature")
+    base = repository.head()
+    # While the run waits, someone deletes the branch or resets it to an older commit;
+    # a plain push would recreate it or fast-forward over the reset.
+    reference = ["update-ref", "-d", "refs/heads/feature"]
+    if change == "reset":
+        reference = ["update-ref", "refs/heads/feature", older]
+    subprocess.run(["git", "--git-dir", str(remote), *reference], check=True)
+    (repository.path / "fix.py").write_text("fixed = True\n")
+    git("add", "fix.py")
+    git("commit", "-q", "-m", "Fix it")
+    with pytest.raises(LXError, match="Push failed"):
+        repository.publish(repository.head(), base, process.environment(paths))
 
 
 @pytest.mark.parametrize("problem", ["two commits", "dirty tree", "wrong commit"])

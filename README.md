@@ -135,7 +135,7 @@ Replace `<run-id>` with the ID returned at startup; `lxreview runs` lists IDs an
 | Follow | `/review-watch <run-id>` | `lxreview watch <run-id>` |
 | Check status | `/review-status <run-id>` | `lxreview status <run-id>` |
 | Inspect pass 1 | `/review-show <run-id> 1` | `lxreview show <run-id> --pass 1` |
-| Approve a waiting commit or push | `/review-approve <run-id> push` | `lxreview approve <run-id> push` |
+| Approve a waiting commit or push | `/review-approve <run-id> commit\|push` | `lxreview approve <run-id> commit\|push` |
 | Stop | `/review-stop <run-id>` | `lxreview stop <run-id>` |
 | Resume | `/review-resume <run-id>` | `lxreview resume <run-id>` |
 

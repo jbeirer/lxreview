@@ -676,10 +676,12 @@ async def execute(
                     read_only=False,
                 )
                 assert isinstance(published, PublishResult)
-                if config.publish.commit == "ask" and repo.tree(published.commit) != checked:
+                # Whatever is approved or pushed must be the change the checks ran on and
+                # diff.patch shows, even when a commit hook changed it.
+                if checked is None or repo.tree(published.commit) != checked:
                     raise LXError(
                         Category.UNSAFE,
-                        f"Commit {published.commit[:10]} differs from the approved change;"
+                        f"Commit {published.commit[:10]} differs from the checked change;"
                         " it exists only locally",
                     )
                 if config.publish.push == "ask":

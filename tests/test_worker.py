@@ -641,8 +641,25 @@ async def test_a_commit_that_differs_from_the_approval_is_never_pushed(
     store.approve("commit")
     await run
     state = store.load()
-    assert state["status"] == "FAILED" and "differs from the approved change" in state["error"]
+    assert state["status"] == "FAILED" and "differs from the checked change" in state["error"]
     assert len(prompts) == 3 and not PushRecorder.pushed
+
+
+@pytest.mark.parametrize("choices", [{"push": "ask"}, {}])
+async def test_a_commit_that_differs_from_the_checks_is_never_offered_or_pushed(
+    paths, tmp_path, waiting, monkeypatch, choices
+):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    # A commit hook changed the tree in the automatic commit turn.
+    monkeypatch.setattr(Repo, "committed", "changed by a hook")
+    config = Config().with_choices(choices)
+    await execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    state = store.load()
+    assert state["status"] == "FAILED" and "differs from the checked change" in state["error"]
+    assert len(prompts) == 3 and not PushRecorder.pushed
+    assert "approval_requested" not in kinds(store)
 
 
 @pytest.mark.parametrize(("step", "turns"), [("commit", 2), ("push", 3)])
