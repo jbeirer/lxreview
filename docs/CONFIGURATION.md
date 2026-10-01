@@ -83,6 +83,16 @@ push = "auto"
 
 Override either setting for one run with `--commit ask` or `--push ask`, in `/review-loop` or in `lxreview run`; a resumed run keeps its own choice. Declining is `lxreview stop <run-id>`. See [approving commits and pushes](../README.md#approving-commits-and-pushes).
 
+## Review-only runs
+
+`--review-only`, in `/review-loop` or in `lxreview run`, makes one run add its accepted findings to a pending GitHub review instead of fixing them:
+
+```bash
+lxreview run https://github.com/owner/repository/pull/123 --repo /path/to/repository --review-only
+```
+
+It is a per-run choice with no configuration setting. The run is always a single pass, so it cannot be combined with `--max-passes`, and it never commits or pushes, so `--commit` and `--push` are refused too. `--chatgpt` and `--claude` work as usual. See [review-only runs](OPERATIONS.md#review-only-runs).
+
 ## Verification environment
 
 The worker does not inherit your shell's PATH or startup files. It finds project tools in Python virtual environments at the top of the repository (`.venv`, `py-venv` or any other name), `node_modules/.bin` and pixi environments, then configured paths and usual user toolchain directories such as `~/.local/bin`, `~/.cargo/bin`, `~/go/bin` and Homebrew.

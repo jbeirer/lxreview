@@ -1,4 +1,5 @@
 import re
+import subprocess
 import tempfile
 import time
 from collections.abc import Iterator
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from . import process
 from .errors import Category, LXError
-from .forge import parse, remote_project
+from .forge import Target, parse, remote_project
 from .paths import Paths, atomic_write
 from .process import binary, run
 
@@ -307,10 +308,27 @@ class Repository:
                 Category.UNSAFE,
                 f"Use a {forge.noun} feature branch, not the base repository's main",
             )
-        # Query the target project's PR/MR ref, not a potentially unrelated local upstream.
         head = self.head()
+        advertised = self._advertised(forge)
+        pushed = self.call("ls-remote", remote, f"refs/heads/{ref}")
+        if pushed.startswith(head + "\t") and not advertised.startswith(head + "\t"):
+            # GitHub and GitLab update the PR/MR head ref asynchronously after a push.
+            raise PullRefPending(
+                Category.UNSAFE,
+                f"Pushed branch matches HEAD but {forge.forge} has not updated the"
+                f" {forge.noun} head yet; retry shortly",
+            )
+        if not advertised.startswith(head + "\t") or not pushed.startswith(head + "\t"):
+            raise LXError(
+                Category.UNSAFE,
+                f"Local HEAD, pushed feature branch, and {forge.noun} head must match before review",
+            )
+        return {"head": head, "branch": branch, "upstream": upstream, "remote_url": remote_url}
+
+    def _advertised(self, forge: Target) -> str:
+        """The target project's PR/MR head ref, not a potentially unrelated local upstream."""
         try:
-            advertised = self.call(
+            return self.call(
                 # No stored credentials either: ChatGPT reads the project signed out.
                 *ANONYMOUS,
                 "ls-remote",
@@ -331,20 +349,38 @@ class Repository:
                 f" repository must be public, because ChatGPT reviews the {forge.noun} signed"
                 " out; if it is public, check the network",
             ) from None
-        pushed = self.call("ls-remote", remote, f"refs/heads/{ref}")
-        if pushed.startswith(head + "\t") and not advertised.startswith(head + "\t"):
-            # GitHub and GitLab update the PR/MR head ref asynchronously after a push.
-            raise PullRefPending(
-                Category.UNSAFE,
-                f"Pushed branch matches HEAD but {forge.forge} has not updated the"
-                f" {forge.noun} head yet; retry shortly",
-            )
-        if not advertised.startswith(head + "\t") or not pushed.startswith(head + "\t"):
+
+    def review_checkpoint(self, target: str) -> dict:
+        """The checkpoint of a review-only run: a clean checkout at the PR head.
+
+        Nothing is pushed, so no branch, upstream or push policy applies: a detached HEAD
+        (git fetch origin pull/N/head) works, and so do other people's PRs.
+        """
+        if self.call("status", "--porcelain"):
             raise LXError(
                 Category.UNSAFE,
-                f"Local HEAD, pushed feature branch, and {forge.noun} head must match before review",
+                "Working tree is dirty; commit or stash intended changes before starting/resuming",
             )
-        return {"head": head, "branch": branch, "upstream": upstream, "remote_url": remote_url}
+        forge = parse(target)
+        head = self.head()
+        if not self._advertised(forge).startswith(head + "\t"):
+            raise LXError(
+                Category.UNSAFE,
+                f"Local HEAD is not the {forge.noun} head; check out the {forge.noun} head (for"
+                f" example gh pr checkout {forge.number}) for a review-only run",
+            )
+        return {"head": head}
+
+    def line_count(self, commit: str, path: str) -> int | None:
+        """The number of lines of a file at commit, or None when commit holds no such file."""
+        result = subprocess.run(
+            [self.git, "cat-file", "blob", f"{commit}:{path}"],
+            cwd=self.path,
+            env=process.environment(self.paths),
+            capture_output=True,
+            timeout=60,
+        )
+        return None if result.returncode else len(result.stdout.splitlines())
 
     def verify_identity(self, identity: dict) -> None:
         remote = identity["upstream"].split("/", 1)[0]

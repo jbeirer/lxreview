@@ -10,7 +10,15 @@ from lxreview.config import Config
 from lxreview.contracts import parse_response
 from lxreview.errors import Category, LXError
 from lxreview.runs import RunStore
-from lxreview.worker import Decision, EditResult, Evaluation, PublishResult, execute
+from lxreview.worker import (
+    Comment,
+    Decision,
+    EditResult,
+    Evaluation,
+    PublishResult,
+    Review,
+    execute,
+)
 
 
 class Repo:
@@ -702,3 +710,217 @@ async def test_a_stop_wins_over_an_approval_in_the_same_poll(
     assert state["status"] == "CANCELLED" and state["awaiting"] is None
     assert len(prompts) == turns and not PushRecorder.pushed
     assert "approval_granted" not in kinds(store)
+
+
+class Drafting(Repo):
+    """A detached checkout of someone else's PR: no branch, upstream or push."""
+
+    pr_head = "a" * 40
+    lines = {"src/parse.py": 40}
+
+    def verify_identity(self, identity):
+        pytest.fail("A review-only run has no branch identity to verify")
+
+    def preflight(self, target):
+        pytest.fail("A review-only run needs no pushed branch")
+
+    def publish(self, commit, base, env):
+        pytest.fail("A review-only run never pushes")
+
+    def review_checkpoint(self, target):
+        if self.pr_head != self.head_value:
+            raise LXError(Category.UNSAFE, "Local HEAD is not the PR head")
+        return {"head": self.head_value}
+
+    def line_count(self, commit, path):
+        return self.lines.get(path)
+
+
+PR = "https://github.com/org/repo/pull/1"
+DRAFT = "https://github.com/org/repo/pull/1#pullrequestreview-7"
+
+
+@pytest.fixture
+def github(monkeypatch):
+    """A fake GitHub: the PR's diff, the user's pending review and the reviews posted."""
+    fake = {"ranges": {"src/parse.py": [range(10, 20)]}, "pending": None, "posted": []}
+    monkeypatch.setattr("lxreview.worker.Repository", Drafting)
+    monkeypatch.setattr(Drafting, "pr_head", "a" * 40)
+    monkeypatch.setattr(Repo, "head_value", "a" * 40)
+    monkeypatch.setattr("lxreview.comments.diff_lines", lambda *a: fake["ranges"])
+    monkeypatch.setattr("lxreview.comments.pending_review", lambda *a: fake["pending"])
+
+    def post(target, payload, paths, config):
+        fake["posted"].append(payload)
+        return {"id": 7, "html_url": DRAFT, "inline": len(payload["comments"])}
+
+    monkeypatch.setattr("lxreview.comments.post", post)
+    return fake
+
+
+def review_only(paths, tmp_path):
+    return RunStore.create(
+        paths, tmp_path, PR, {"head": "a" * 40}, 1, Drafting(tmp_path, paths).audit_root(), True
+    )
+
+
+def reviewing(decisions, comments, prompts=None):
+    """A fake Claude that only evaluates and drafts comments, as a review-only run allows."""
+
+    async def turn(paths, config, store, prompt, schema, read_only):
+        assert schema is Review and read_only, "A review-only run never edits or commits"
+        if prompts is not None:
+            prompts.append(prompt)
+        return Review(
+            findings=[
+                Decision(finding=i, decision=d, reason="checked", evidence="src/parse.py:12")
+                for i, d in decisions.items()
+            ],
+            comments=comments,
+        )
+
+    return turn
+
+
+SUGGESTION = "Stop at the last bin.\n```suggestion\n    for i in range(n + 1):\n```"
+
+
+async def test_review_only_drafts_accepted_findings_as_a_pending_review(paths, tmp_path, github):
+    store = review_only(paths, tmp_path)
+    prompts: list[str] = []
+    reviewer = Reviewer(
+        [
+            "SUBSTANTIAL [S1] off by one\nNON_BLOCKING [N1] unclear name\n"
+            "NON_BLOCKING [N2] reorder imports\nVERDICT: SUBSTANTIAL_ISSUES"
+        ]
+    )
+    turn = reviewing(
+        {"S1": "ACCEPTED", "N1": "ACCEPTED", "N2": "REJECTED"},
+        [
+            Comment(finding="S1", path="src/parse.py", line=12, start_line=12, body=SUGGESTION),
+            # Outside the PR's diff: GitHub cannot place it inline.
+            Comment(finding="N1", path="src/parse.py", line=30, body="Name it `limit`."),
+        ],
+        prompts,
+    )
+    await execute(paths, Config(), store, reviewer, turn)
+    state = store.load()
+    assert state["status"] == "REVIEW_DRAFTED" and state["completed_pass"] == 1
+    # Every finding is weighed, without a polish pass, and the PR discussion still counts.
+    assert len(prompts) == 1 and "repository: S1, N1, N2." in prompts[0]
+    assert "```suggestion" in prompts[0] and prompts[0].endswith(DISCUSSION)
+    (payload,) = github["posted"]
+    assert "event" not in payload and payload["commit_id"] == "a" * 40
+    assert payload["comments"] == [
+        {"path": "src/parse.py", "line": 12, "side": "RIGHT", "body": SUGGESTION}
+    ]
+    assert "**src/parse.py:30**" in payload["body"]
+    assert f"https://github.com/org/repo/blob/{'a' * 40}/src/parse.py#L30" in payload["body"]
+    assert "Name it `limit`." in payload["body"] and "reorder" not in payload["body"]
+    audit = Path(state["audit"]) / "pass-01"
+    assert json.loads((audit / "review-draft.json").read_text()) == payload
+    assert json.loads((audit / "review-posted.json").read_text())["html_url"] == DRAFT
+    assert (audit / "evaluation.json").exists() and (audit / "discussion.md").exists()
+    lines = (store.directory / "events.jsonl").read_text().splitlines()
+    events = [json.loads(line) for line in lines]
+    (posted,) = [e for e in events if e["kind"] == "review_posted"]
+    assert (posted["inline"], posted["summary"], posted["url"]) == (1, 1, DRAFT)
+    assert "REVIEW_DRAFTED" in store.report() and DRAFT in store.report()
+
+
+@pytest.mark.parametrize(
+    ("path", "line", "start_line"),
+    [
+        ("docs/missing.md", 3, None),
+        ("src/parse.py", 41, None),
+        ("src/parse.py", 12, 14),
+        ("/etc/passwd", 1, None),
+        ("src/../src/parse.py", 12, None),
+        ("./src/parse.py", 12, None),
+    ],
+)
+async def test_an_anchor_that_is_not_in_the_file_goes_to_the_summary_without_a_link(
+    paths, tmp_path, github, path, line, start_line
+):
+    store = review_only(paths, tmp_path)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    comment = Comment(finding="S1", path=path, line=line, start_line=start_line, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    (payload,) = github["posted"]
+    # Without a valid anchor, the reviewer's title names the finding instead.
+    assert payload["comments"] == [] and payload["body"] == "**off by one**\n\nFix it."
+
+
+async def test_review_only_posts_nothing_for_a_clean_review(paths, tmp_path, github):
+    store = review_only(paths, tmp_path)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("A clean review needs no evaluation")
+
+    await execute(paths, Config(), store, Reviewer(["VERDICT: CLEAN"]), forbidden)
+    assert store.load()["status"] == "CLEAN" and not github["posted"]
+
+
+async def test_review_only_posts_nothing_when_no_finding_is_accepted(paths, tmp_path, github):
+    store = review_only(paths, tmp_path)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "REJECTED"}, []))
+    assert store.load()["status"] == "NO_VALID_SUBSTANTIAL_FINDINGS" and not github["posted"]
+    assert not (Path(store.load()["audit"]) / "pass-01/review-draft.json").exists()
+
+
+@pytest.mark.parametrize(
+    "comments",
+    [
+        # A comment for a rejected finding, and an accepted finding without one.
+        [
+            Comment(finding="S1", path="src/parse.py", line=12, body="Fix it."),
+            Comment(finding="S2", path="src/parse.py", line=13, body="Rejected anyway."),
+        ],
+        [],
+        [
+            Comment(finding="S1", path="src/parse.py", line=12, body="Fix it."),
+            Comment(finding="S1", path="src/parse.py", line=13, body="Twice."),
+        ],
+    ],
+)
+async def test_comments_must_match_the_accepted_findings(paths, tmp_path, github, comments):
+    store = review_only(paths, tmp_path)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] a\nSUBSTANTIAL [S2] b\nVERDICT: SUBSTANTIAL_ISSUES"])
+    turn = reviewing({"S1": "ACCEPTED", "S2": "REJECTED"}, comments)
+    await execute(paths, Config(), store, reviewer, turn)
+    state = store.load()
+    assert state["status"] == "FAILED" and "one to one" in state["error"]
+    assert not github["posted"]
+    # The decisions are kept for the audit all the same.
+    assert (Path(state["audit"]) / "pass-01/evaluation.json").exists()
+
+
+async def test_a_pr_head_that_moved_gets_no_review(paths, tmp_path, github, monkeypatch):
+    store = review_only(paths, tmp_path)
+
+    def moved(*args):
+        # The author pushes while LXReview reads the diff.
+        Drafting.pr_head = "b" * 40
+        return github["ranges"]
+
+    monkeypatch.setattr("lxreview.comments.diff_lines", moved)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    state = store.load()
+    assert state["status"] == "FAILED" and "not the PR head" in state["error"]
+    assert not github["posted"] and state["completed_pass"] == 0
+    assert not (Path(state["audit"]) / "pass-01/review-posted.json").exists()
+
+
+async def test_an_existing_pending_review_is_never_replaced(paths, tmp_path, github):
+    store = review_only(paths, tmp_path)
+    github["pending"] = DRAFT
+    reviewer = Reviewer(["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES"])
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    state = store.load()
+    assert state["status"] == "FAILED" and f"pending review on this PR: {DRAFT}" in state["error"]
+    assert not github["posted"]

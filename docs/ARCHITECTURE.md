@@ -10,6 +10,7 @@ For setup and run control, see [Operations](OPERATIONS.md). For trust boundaries
 | `worker.py` | Provider-neutral review loop |
 | `reviewer.py` | Independent review semantics and prompts |
 | `forge.py` | GitHub PR and GitLab MR targets: URL, push remote and review ref shapes |
+| `comments.py` | Review-only runs: the PR's diff lines, pending reviews, and the pending review LXReview creates with `gh` |
 | `browser/playwright.py` | ChatGPT selectors, page state, prompt readback, submission and completion rules |
 | `browser/service.py` | Supervised driver process that owns Chrome and serves named operations over a private Unix socket |
 | `backend.py` | Composition root; workflow prompts and worker logic do not branch on browser placement |
@@ -56,6 +57,8 @@ Claude uses three restricted turns in one Claude session:
 
 LXReview validates the resulting commit and pushes it outside those turns. Optionally, the run waits for the user's approval before the commit turn, before the push, or both; `lxreview approve` records it in the run state, and `stop` cancels the wait. The [operations policy](OPERATIONS.md#review-decisions-and-verification) covers findings, baseline checks and final-pass behavior.
 
+A review-only run has one pass and only the first turn: the read-only evaluation also writes a review comment for each accepted finding. LXReview checks each comment's file and lines at the reviewed head, places comments inline where they fall in the PR's diff, and creates one pending GitHub review outside the sandbox. Its checkpoint is a clean checkout whose HEAD is the PR head; no branch, upstream or push policy is involved. See [review-only runs](OPERATIONS.md#review-only-runs).
+
 ```mermaid
 stateDiagram-v2
     [*] --> QUEUED
@@ -63,6 +66,7 @@ stateDiagram-v2
     RUNNING --> CLEAN
     RUNNING --> NO_VALID_SUBSTANTIAL_FINDINGS
     RUNNING --> MAX_PASSES
+    RUNNING --> REVIEW_DRAFTED
     RUNNING --> FAILED
     RUNNING --> CANCELLED
     RUNNING --> INTERRUPTED
@@ -71,7 +75,7 @@ stateDiagram-v2
     INTERRUPTED --> QUEUED: verified resume
 ```
 
-Resume verifies branch/remote identity and a clean, pushed HEAD. Incomplete pass evidence is archived before another independent pass. A durable cancellation marker wins over later worker state updates; observing a missing worker marks a nonterminal run interrupted.
+Resume verifies branch/remote identity and a clean, pushed HEAD; for a review-only run, a clean checkout at the PR head and no pending review. Incomplete pass evidence is archived before another independent pass. A durable cancellation marker wins over later worker state updates; observing a missing worker marks a nonterminal run interrupted.
 
 ## Hosts, storage and integration
 
@@ -83,7 +87,7 @@ Host identity prevents users of shared homes, such as LXPLUS nodes, from treatin
 | `~/.lxreview/bin/lxreview` | Fixed launcher written by `setup`: the tool environment's interpreter with this installation root |
 | `~/.lxreview/state/runs/<id>/` | Run state, redacted events, worker output, Claude session ID and cancellation marker |
 | `<git-common-dir>/review-loop/<id>/` | Run metadata, events, summary and per-pass evidence |
-| `<git-common-dir>/review-loop/<id>/pass-NN/` | Verbatim review, explicit evaluations, PR discussion, diff, check reports and metadata |
+| `<git-common-dir>/review-loop/<id>/pass-NN/` | Verbatim review, explicit evaluations, PR discussion, diff, check reports and metadata; in a review-only run, the review as prepared (`review-draft.json`) and as created (`review-posted.json`) |
 
 Using the Git common directory keeps audit evidence out of commits and supports worktrees. Interrupted pass directories are retained with an `-interrupted-*` suffix. Events exclude hidden reasoning and redact credential-shaped values; raw reviews remain verbatim. See [Security](../SECURITY.md) before sharing artifacts.
 

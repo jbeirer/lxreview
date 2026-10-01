@@ -217,7 +217,7 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':{'evaluat
 
 
 async def test_every_turn_shares_tools_and_schema_so_the_prompt_cache_survives(paths, tmp_path):
-    from lxreview.worker import EditResult, PublishResult
+    from lxreview.worker import EditResult, PublishResult, Review
 
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
@@ -240,17 +240,19 @@ hook=settings['hooks']['PreToolUse'][0]['hooks'][0]
 command=hook['command']
 phase=re.search(r'--phase (\\w+)',command).group(1)
 prompt=sys.stdin.read()
+part=re.search(r'as the `(\\w+)` field',prompt).group(1)
 # The guard executable does not exist here: the hook must block rather than fail open.
 write={'tool_name':'Write','tool_input':{'file_path':'x'},'cwd':os.getcwd()}
 blocked=subprocess.run(['/bin/sh','-c',command],input=json.dumps(write),text=True,capture_output=True).returncode
 record={'tools':sys.argv[sys.argv.index('--tools')+1],'schema':sys.argv[sys.argv.index('--json-schema')+1],
         'deny_write':settings['sandbox']['filesystem']['denyWrite'],'blocked':blocked,'prompt':prompt,
-        'hook_timeout':hook.get('timeout')}
-open(sys.argv[0]+'.'+phase,'w').write(json.dumps(record))
-parts={'evaluate':{'evaluation':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}},
+        'hook_timeout':hook.get('timeout'),'phase':phase}
+open(sys.argv[0]+'.'+part,'w').write(json.dumps(record))
+decided={'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}
+parts={'evaluation':{'evaluation':decided},'review':{'review':{**decided,'comments':[]}},
        'edit':{'edit':{'tests':['pytest: passed'],'tests_passed':True,'preexisting_failures':[],'summary':'s'}},
        'publish':{'publish':{'commit':'a'*40}}}
-print(json.dumps({'type':'result','is_error':False,'structured_output':parts[phase]}),flush=True)
+print(json.dumps({'type':'result','is_error':False,'structured_output':parts[part]}),flush=True)
 """
     )
     executable.chmod(0o700)
@@ -258,21 +260,28 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':parts[pha
     config.runtime.claude = str(executable)
     assert not paths.executable.exists()
     await claude_turn(paths, config, store, "evaluate", Evaluation, read_only=True)
+    # A review-only run's evaluation, which also drafts the review comments.
+    await claude_turn(paths, config, store, "review", Review, read_only=True)
     await claude_turn(paths, config, store, "edit", EditResult, read_only=False)
     await claude_turn(paths, config, store, "publish", PublishResult, read_only=False)
     records = {
-        phase: json.loads(Path(f"{executable}.{phase}").read_text())
-        for phase in ("evaluate", "edit", "publish")
+        part: json.loads(Path(f"{executable}.{part}").read_text())
+        for part in ("evaluation", "review", "edit", "publish")
     }
     assert len({(r["tools"], r["schema"]) for r in records.values()}) == 1
     assert all(r["blocked"] == 2 for r in records.values())
     # A timed-out hook lets the tool run, so the turn's own timeout must end it first.
     assert all(r["hook_timeout"] > config.review.worker_timeout for r in records.values())
-    assert str(repo) in records["evaluate"]["deny_write"]
+    assert [records[part]["phase"] for part in records] == [
+        "evaluate",
+        "evaluate",
+        "edit",
+        "publish",
+    ]
+    for part in ("evaluation", "review"):
+        assert str(repo) in records[part]["deny_write"]
+        assert "use only the Read, Glob and Grep tools" in records[part]["prompt"]
     assert str(repo) not in records["edit"]["deny_write"] + records["publish"]["deny_write"]
-    assert "use only the Read, Glob and Grep tools" in records["evaluate"]["prompt"]
-    for phase, part in (("evaluate", "evaluation"), ("edit", "edit"), ("publish", "publish")):
-        assert f"as the `{part}` field" in records[phase]["prompt"]
 
 
 async def test_result_in_another_turns_field_is_refused(paths, store, tmp_path):

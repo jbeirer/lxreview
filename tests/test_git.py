@@ -507,3 +507,64 @@ def test_main_branch_is_refused_only_on_the_base_repository(
     else:
         with pytest.raises(LXError, match="feature branch"):
             repository.preflight(target)
+
+
+def test_review_only_checkpoint_accepts_any_checkout_at_the_pr_head(repo, monkeypatch):
+    repository, git = repo
+    head = git("rev-parse", "HEAD")
+    # Another person's PR, fetched without a branch: detached, no upstream, no push policy.
+    git("checkout", "-q", "--detach")
+    git("config", "remote.origin.pushurl", "https://github.com/other/repo")
+    monkeypatch.setattr(
+        repository, "check_push_policy", lambda: pytest.fail("Nothing is pushed in this mode")
+    )
+    advertised = {"value": head}
+    original = repository.call
+    probes = []
+
+    def call(*args, **kwargs):
+        if "ls-remote" in args:
+            env = kwargs.get("env") or {}
+            probes.append((args, env.get("GIT_TERMINAL_PROMPT"), env.get("GIT_ASKPASS")))
+            return advertised["value"] + "\t" + args[-1]
+        return original(*args)
+
+    monkeypatch.setattr(repository, "call", call)
+    target = "https://github.com/org/repo/pull/12"
+    assert repository.review_checkpoint(target) == {"head": head}
+    assert probes == [
+        (
+            (
+                "-c",
+                "credential.helper=",
+                "ls-remote",
+                "https://github.com/org/repo.git",
+                "refs/pull/12/head",
+            ),
+            "0",
+            "",
+        )
+    ]
+    advertised["value"] = "b" * 40
+    with pytest.raises(LXError, match="gh pr checkout 12") as err:
+        repository.review_checkpoint(target)
+    assert err.value.category == Category.UNSAFE
+    advertised["value"] = head
+    (repository.path / "notes.txt").write_text("uncommitted")
+    with pytest.raises(LXError, match="dirty"):
+        repository.review_checkpoint(target)
+
+
+def test_line_count_reads_the_file_at_the_commit(repo):
+    repository, git = repo
+    (repository.path / "src").mkdir()
+    (repository.path / "src/a.py").write_text("one\ntwo\nthree\n")
+    (repository.path / "data.bin").write_bytes(b"\x00\xff\n\x80")
+    git("add", "src/a.py", "data.bin")
+    git("commit", "-q", "-m", "files")
+    head = repository.head()
+    (repository.path / "src/a.py").write_text("one\n")
+    assert repository.line_count(head, "src/a.py") == 3
+    assert repository.line_count(head, "data.bin") == 2
+    assert repository.line_count(head, "src") is None
+    assert repository.line_count(head, "missing.py") is None

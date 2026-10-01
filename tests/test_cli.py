@@ -767,3 +767,152 @@ def test_local_browser_setup_over_ssh_defaults_to_the_repository_host(
     assert result.exit_code == 0, result.output
     config = Config.load(paths)
     assert (config.mode, config.role, config.browser.placement) == ("local-browser", role, "local")
+
+
+PR = "https://github.com/org/repo/pull/1"
+DRAFT = "https://github.com/org/repo/pull/1#pullrequestreview-7"
+
+
+@pytest.fixture
+def checkout(paths, tmp_path, monkeypatch):
+    """`run` and `resume` against a fake checkout, gh and supervisor."""
+    import lxreview.cli as cli
+    from lxreview.config import Config
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\n")
+    claude.chmod(0o700)
+    config = Config()
+    config.runtime.claude = str(claude)
+    config.save(paths)
+    calls: list[str] = []
+    github = {"pending": None}
+
+    class Checkout:
+        def __init__(self, path, paths):
+            pass
+
+        def head(self):
+            return "a" * 40
+
+        def audit_root(self):
+            return tmp_path / "audit"
+
+        def verify_identity(self, identity):
+            calls.append("verify_identity")
+
+        def preflight(self, target, settle=0):
+            calls.append("preflight")
+            return {"head": "a" * 40, "branch": "f", "upstream": "origin/f", "remote_url": "u"}
+
+        def review_checkpoint(self, target):
+            calls.append("review_checkpoint")
+            return {"head": "a" * 40}
+
+    def pending_review(target, paths, config):
+        calls.append("pending_review")
+        return github["pending"]
+
+    monkeypatch.setattr("lxreview.git.Repository", Checkout)
+    monkeypatch.setattr("lxreview.comments.pending_review", pending_review)
+    monkeypatch.setattr(
+        cli.Supervisor, "start", lambda self, name, argv, cwd=None: calls.append(name)
+    )
+    monkeypatch.setattr(cli.Supervisor, "status", lambda self, name: False)
+    return calls, github
+
+
+def test_a_review_only_run_needs_only_a_clean_checkout_at_the_pr_head(checkout, paths, tmp_path):
+    from lxreview.runs import RunStore
+
+    calls, _ = checkout
+    result = runner.invoke(app, ["run", PR, "--repo", str(tmp_path), "--review-only"])
+    assert result.exit_code == 0, result.output
+    started = json.loads(result.stdout)
+    # No branch, upstream or push policy: other people's PRs and detached checkouts work.
+    assert calls == ["review_checkpoint", "pending_review", "run-" + started["run_id"]]
+    state = RunStore(paths, started["run_id"]).load()
+    assert state["review_only"] is True and state["max_passes"] == 1
+    assert started["message"].startswith(f"Started review-only run `{started['run_id']}` for {PR}.")
+    assert (
+        "- Accepted findings will be added to a pending review on the PR, visible only to you"
+        " until you submit it." in started["message"]
+    )
+    assert "Commits and pushes" not in started["message"]
+
+
+def test_a_fix_run_keeps_its_preflight(checkout, paths, tmp_path):
+    from lxreview.runs import RunStore
+
+    calls, _ = checkout
+    result = runner.invoke(app, ["run", PR, "--repo", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    started = json.loads(result.stdout)
+    assert calls == ["preflight", "run-" + started["run_id"]]
+    assert RunStore(paths, started["run_id"]).load()["review_only"] is False
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            ["https://gitlab.com/g/p/-/merge_requests/3"],
+            "Review-only runs post GitHub review comments; GitLab merge requests are not supported",
+        ),
+        ([PR, "--max-passes", "2"], "single pass; leave out --max-passes"),
+        ([PR, "--push", "ask"], "neither commits nor pushes"),
+    ],
+)
+def test_review_only_refuses_what_it_cannot_do(checkout, tmp_path, arguments, message):
+    calls, _ = checkout
+    result = runner.invoke(app, ["run", *arguments, "--repo", str(tmp_path), "--review-only"])
+    assert result.exit_code == 1 and message in str(result.exception)
+    assert calls == []
+
+
+def test_review_only_refuses_while_the_user_has_a_pending_review(checkout, tmp_path):
+    calls, github = checkout
+    github["pending"] = DRAFT
+    result = runner.invoke(app, ["run", PR, "--repo", str(tmp_path), "--review-only"])
+    assert f"You already have a pending review on this PR: {DRAFT}" in str(result.exception)
+    assert not any(call.startswith("run-") for call in calls)
+
+
+@pytest.mark.parametrize(
+    ("completed", "pending", "error"),
+    [
+        (0, None, None),
+        # A run interrupted while posting may have created the review it never recorded.
+        (0, DRAFT, "already have a pending review"),
+        (1, None, "already created its review"),
+    ],
+)
+def test_resuming_a_review_only_run_checks_for_its_review(
+    checkout, paths, tmp_path, completed, pending, error
+):
+    from lxreview.runs import RunStore
+
+    calls, github = checkout
+    github["pending"] = pending
+    store = RunStore.create(paths, tmp_path, PR, {"head": "a" * 40}, 1, tmp_path / "audit", True)
+    store.update(status="FAILED", completed_pass=completed)
+    result = runner.invoke(app, ["resume", store.id])
+    if error:
+        assert error in str(result.exception)
+        assert "run-" + store.id not in calls
+    else:
+        assert result.exit_code == 0, result.output
+        assert calls == ["review_checkpoint", "pending_review", "run-" + store.id]
+
+
+def test_the_timeline_links_the_draft_review():
+    from lxreview.timeline import PHASES, describe, style
+
+    event = {"kind": "review_posted", "time": "", "inline": 2, "summary": 1, "url": DRAFT}
+    (line,) = [text.split("  ", 1)[1] for text in describe(event)]
+    assert (
+        line == f"Draft review created on GitHub: 2 inline, 1 in summary — {DRAFT}; submit it there"
+    )
+    assert style(line) == "bold green" and style("Finished: REVIEW_DRAFTED") == "bold green"
+    assert PHASES["commenting"] == "drafting the GitHub review"
