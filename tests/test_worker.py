@@ -8,7 +8,7 @@ from conftest import DISCUSSION
 
 from lxreview.config import Config
 from lxreview.contracts import parse_response
-from lxreview.errors import LXError
+from lxreview.errors import Category, LXError
 from lxreview.runs import RunStore
 from lxreview.worker import Decision, EditResult, Evaluation, PublishResult, execute
 
@@ -605,6 +605,23 @@ async def test_approval_shows_the_tree_it_approves(paths, tmp_path, waiting, mon
     assert state["status"] == "FAILED"
     assert "working tree changed after the checks" in state["error"]
     assert len(prompts) == 2 and "approval_requested" not in kinds(store)
+
+
+async def test_no_commit_without_the_checked_tree(paths, tmp_path, waiting, monkeypatch):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+
+    def unavailable(self, env):
+        raise LXError(Category.UNAVAILABLE, "git failed")
+
+    monkeypatch.setattr(Repo, "worktree_tree", unavailable)
+    await execute(paths, Config(), store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    state = store.load()
+    assert state["status"] == "FAILED"
+    assert "checked change could not be captured" in state["error"]
+    # Refused before the commit turn, so no local commit is left behind.
+    assert len(prompts) == 2 and not PushRecorder.pushed
 
 
 async def test_a_commit_holds_exactly_the_checked_change(paths, tmp_path, waiting, monkeypatch):

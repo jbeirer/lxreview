@@ -95,6 +95,55 @@ def test_publish_pushes_exactly_the_one_worker_commit(repo, remote, paths):
     assert pushed == commit
 
 
+@pytest.fixture
+def signing(repo, tmp_path):
+    """commit.gpgsign with a stand-in for gpg that signs anything."""
+    _, git = repo
+    gpg = tmp_path / "fake-gpg"
+    gpg.write_text(
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        "printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fake' '-----END PGP SIGNATURE-----'\n"
+        "printf '\\n[GNUPG:] SIG_CREATED D 1 8 00 0 FAKE\\n' >&2\n"
+    )
+    gpg.chmod(0o755)
+    git("config", "gpg.program", str(gpg))
+    git("config", "commit.gpgsign", "true")
+
+
+@pytest.mark.parametrize("moved", [False, True])
+def test_publish_pushes_only_a_signed_commit_of_the_validated_change(
+    repo, remote, paths, monkeypatch, signing, moved
+):
+    from lxreview import process
+
+    repository, git = repo
+    base = repository.head()
+    (repository.path / "fix.py").write_text("fixed = True\n")
+    git("add", "fix.py")
+    git("commit", "-q", "--no-gpg-sign", "-m", "Fix it")
+    commit = repository.head()
+    if moved:
+        check = repository.check_push_policy
+
+        def commit_meanwhile():
+            # Another process commits after publish() validated HEAD, before signing.
+            check()
+            (repository.path / "unchecked.py").write_text("unchecked = True\n")
+            git("add", "unchecked.py")
+            git("commit", "-q", "--no-gpg-sign", "-m", "Unchecked")
+
+        monkeypatch.setattr(repository, "check_push_policy", commit_meanwhile)
+        with pytest.raises(LXError, match="HEAD moved while the commit was signed"):
+            repository.publish(commit, base, process.environment(paths))
+        assert git("ls-remote", "origin", "refs/heads/feature").split()[0] == base
+        return
+    signed = repository.publish(commit, base, process.environment(paths))
+    assert signed != commit and repository.tree(signed) == repository.tree(commit)
+    assert "PGP SIGNATURE" in git("cat-file", "commit", signed)
+    assert git("ls-remote", "origin", "refs/heads/feature").split()[0] == signed
+
+
 def test_publish_pushes_the_commit_even_when_head_moves(repo, remote, paths, monkeypatch):
     from lxreview import process
 

@@ -212,7 +212,17 @@ class Repository:
                 timeout=120,
                 env=env,
             )
-            commit = self.head()
+            # The amend signs whatever HEAD is now: it must still be the validated change.
+            signed = self.head()
+            if (
+                self.call("rev-list", "--count", f"{base}..{signed}") != "1"
+                or self.call("rev-parse", f"{signed}^") != base
+                or self.tree(signed) != self.tree(commit)
+            ):
+                raise LXError(
+                    Category.UNSAFE, "HEAD moved while the commit was signed; nothing was pushed"
+                )
+            commit = signed
         command = self.push_command(commit, base)
         remote = command[-2]
         try:

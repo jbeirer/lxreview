@@ -645,10 +645,11 @@ async def execute(
                 if repo.head() != identity["head"]:
                     raise LXError(Category.UNSAFE, "HEAD changed during the edit/test phase")
                 environment = toolchain.push_environment(paths, config)
+                # Without the checked tree, nothing can show the commit holds the checked change.
+                if checked is None:
+                    raise LXError(Category.UNSAFE, "The checked change could not be captured")
                 if config.publish.commit == "ask":
                     # The commit must hold exactly the checked change.
-                    if checked is None:
-                        raise LXError(Category.UNSAFE, "The checked change could not be captured")
                     if repo.worktree_tree(environment) != checked:
                         raise LXError(Category.UNSAFE, "The working tree changed after the checks")
                     changed = repo.call(
@@ -678,7 +679,7 @@ async def execute(
                 assert isinstance(published, PublishResult)
                 # Whatever is approved or pushed must be the change the checks ran on and
                 # diff.patch shows, even when a commit hook changed it.
-                if checked is None or repo.tree(published.commit) != checked:
+                if repo.tree(published.commit) != checked:
                     raise LXError(
                         Category.UNSAFE,
                         f"Commit {published.commit[:10]} differs from the checked change;"
