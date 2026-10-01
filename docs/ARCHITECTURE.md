@@ -54,7 +54,7 @@ Claude uses three restricted turns in one Claude session:
 2. Offline edits and checks, without Git metadata writes.
 3. Staging and committing after verification permits publication.
 
-LXReview validates the resulting commit and pushes it outside those turns. The [operations policy](OPERATIONS.md#review-decisions-and-verification) covers findings, baseline checks and final-pass behavior.
+LXReview validates the resulting commit and pushes it outside those turns. Optionally, the run waits for the user's approval before the commit turn, before the push, or both; `lxreview approve` records it in the run state, and `stop` cancels the wait. The [operations policy](OPERATIONS.md#review-decisions-and-verification) covers findings, baseline checks and final-pass behavior.
 
 ```mermaid
 stateDiagram-v2
@@ -87,7 +87,7 @@ Host identity prevents users of shared homes, such as LXPLUS nodes, from treatin
 
 Using the Git common directory keeps audit evidence out of commits and supports worktrees. Interrupted pass directories are retained with an `-interrupted-*` suffix. Events exclude hidden reasoning and redact credential-shaped values; raw reviews remain verbatim. See [Security](../SECURITY.md) before sharing artifacts.
 
-Claude's user integration registers the MCP server and six slash commands pointing to the fixed launcher, so upgrading the package keeps them valid. Ownership records allow uninstall to remove only unchanged package-owned entries. Setup leaves shell startup files and PATH untouched.
+Claude's user integration registers the MCP server and seven slash commands pointing to the fixed launcher, so upgrading the package keeps them valid. Ownership records allow uninstall to remove only unchanged package-owned entries. Setup leaves shell startup files and PATH untouched.
 
 During sandboxed commands, Claude Code creates empty, read-only placeholders for protected paths such as `.bashrc`, `.mcp.json` and `.claude/settings.json`. They disappear after the command, and LXReview excludes them from `git status` during the run. The full filesystem boundary is documented in [Security](../SECURITY.md).
 

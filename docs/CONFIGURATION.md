@@ -68,6 +68,21 @@ worker_timeout = 7200
 
 `lxreview run <PR-URL> --max-passes 3` overrides the pass limit for a new run. `LXREVIEW_MAX_PASSES` overrides the configured limit; the CLI option takes precedence. See [Operations](OPERATIONS.md#review-decisions-and-verification) for final-pass behavior.
 
+## Commits and pushes
+
+```toml
+[publish]
+commit = "auto"
+push = "auto"
+```
+
+| Setting | `auto` (default) | `ask` |
+| --- | --- | --- |
+| `commit` | Claude commits the fix as soon as the checks pass | The run waits until you approve with `lxreview approve <run-id> commit` |
+| `push` | LXReview pushes the commit right away | The run waits until you approve with `lxreview approve <run-id> push` |
+
+Override either setting for one run with `--commit ask` or `--push ask`, in `/review-loop` or in `lxreview run`; a resumed run keeps its own choice. Declining is `lxreview stop <run-id>`. See [approving commits and pushes](../README.md#approving-commits-and-pushes).
+
 ## Verification environment
 
 The worker does not inherit your shell's PATH or startup files. It finds project tools in Python virtual environments at the top of the repository (`.venv`, `py-venv` or any other name), `node_modules/.bin` and pixi environments, then configured paths and usual user toolchain directories such as `~/.local/bin`, `~/.cargo/bin`, `~/go/bin` and Homebrew.

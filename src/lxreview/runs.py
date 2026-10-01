@@ -84,6 +84,22 @@ class RunStore:
             self.save(state)
             return state
 
+    def approve(self, step: str) -> None:
+        """Approve the commit or push the worker waits for. Naming the step keeps a repeated
+        or stale approval from letting a later step through."""
+        with lock(self.directory / "state.lock", blocking=True):
+            state = self.load()
+            stopping = state["status"] in TERMINAL or (self.directory / "cancel").exists()
+            awaiting = None if stopping else state.get("awaiting")
+            if awaiting != step:
+                raise LXError(
+                    Category.UNSAFE,
+                    f"Run {self.id} is not waiting for approval to {step}"
+                    + (f"; it waits for approval to {awaiting}" if awaiting else ""),
+                )
+            state["approved"] = step
+            self.save(state)
+
     def observed(self, config) -> dict:
         from .process import Supervisor
 
@@ -134,6 +150,9 @@ class RunStore:
         return "\n".join(lines) + "\n"
 
     def finish(self, status: str, error: str = "") -> None:
-        state = self.update(status=status, phase="finished", error=redact(error))
+        # A worker killed while it waits cannot withdraw its approval request itself.
+        state = self.update(
+            status=status, phase="finished", error=redact(error), awaiting=None, approved=None
+        )
         self.event("run_finished", status=state["status"], error=error)
         atomic_write(Path(state["audit"]) / "summary.md", self.report())

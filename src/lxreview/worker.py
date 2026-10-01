@@ -369,6 +369,30 @@ def command_guidance(config: Config) -> str:
     return text
 
 
+# Seconds between checks for the user's approval of a commit or push.
+APPROVAL_POLL = 2
+
+
+async def await_approval(store: RunStore, step: str, number: int, **detail) -> bool:
+    """Wait until the user approves this step (`lxreview approve`); False when the run is
+    stopped instead. A stop also ends the worker's unit, which cancels this wait."""
+    store.update(phase=f"awaiting_{step}", awaiting=step, approved=None)
+    store.event("approval_requested", pass_number=number, run_id=store.id, step=step, **detail)
+    try:
+        # A stop wins over an approval recorded in the same poll interval.
+        while not (store.directory / "cancel").exists():
+            if store.load().get("approved") == step:
+                break
+            await asyncio.sleep(APPROVAL_POLL)
+        else:
+            return False
+    finally:
+        # A stopped run must not leave a stale request that a resumed run could approve.
+        store.update(awaiting=None, approved=None)
+    store.event("approval_granted", pass_number=number, step=step)
+    return True
+
+
 async def settled_preflight(repo: Repository, target: str, settle: float = 60) -> dict:
     """Preflight that waits for a lagging PR/MR ref without blocking signal handling."""
     deadline = time.monotonic() + settle
@@ -567,6 +591,9 @@ async def execute(
                     )
                     return
                 store.update(phase="editing_testing")
+                # The checked change, captured once: its diff is what the user sees and
+                # approves, and the commit must hold exactly this tree.
+                checked = None
                 try:
                     fixes = await turn(
                         paths,
@@ -583,11 +610,17 @@ async def execute(
                     # Preserve edits even when the Claude process fails or is cancelled.
                     try:
                         repo.verify_identity(state["identity"])
+                        # Untracked files belong to the change, as they do in the commit.
+                        checked = repo.worktree_tree(toolchain.push_environment(paths, config))
                         atomic_write(
                             pass_dir / "diff.patch",
                             redact(
                                 repo.call(
-                                    "diff", "--no-ext-diff", "--no-textconv", identity["head"]
+                                    "diff",
+                                    "--no-ext-diff",
+                                    "--no-textconv",
+                                    identity["head"],
+                                    checked,
                                 )
                             ),
                         )
@@ -611,7 +644,30 @@ async def execute(
                 repo.verify_identity(state["identity"])
                 if repo.head() != identity["head"]:
                     raise LXError(Category.UNSAFE, "HEAD changed during the edit/test phase")
-                store.update(phase="publishing")
+                environment = toolchain.push_environment(paths, config)
+                # Without the checked tree, nothing can show the commit holds the checked change.
+                if checked is None:
+                    raise LXError(Category.UNSAFE, "The checked change could not be captured")
+                if config.publish.commit == "ask":
+                    # The commit must hold exactly the checked change.
+                    if repo.worktree_tree(environment) != checked:
+                        raise LXError(Category.UNSAFE, "The working tree changed after the checks")
+                    changed = repo.call(
+                        "diff", "--name-only", "--no-renames", identity["head"], checked
+                    ).splitlines()
+                    if not await await_approval(store, "commit", number, files=changed):
+                        store.finish("CANCELLED")
+                        return
+                    repo.verify_identity(state["identity"])
+                    if repo.head() != identity["head"]:
+                        raise LXError(Category.UNSAFE, "HEAD changed while waiting for approval")
+                    if repo.worktree_tree(environment) != checked:
+                        raise LXError(
+                            Category.UNSAFE, "The working tree changed while waiting for approval"
+                        )
+                if store.update(phase="publishing")["status"] == "CANCELLED":
+                    store.finish("CANCELLED")
+                    return
                 published = await turn(
                     paths,
                     config,
@@ -621,12 +677,27 @@ async def execute(
                     read_only=False,
                 )
                 assert isinstance(published, PublishResult)
+                # Whatever is approved or pushed must be the change the checks ran on and
+                # diff.patch shows, even when a commit hook changed it.
+                if repo.tree(published.commit) != checked:
+                    raise LXError(
+                        Category.UNSAFE,
+                        f"Commit {published.commit[:10]} differs from the checked change;"
+                        " it exists only locally",
+                    )
+                if config.publish.push == "ask":
+                    subject = repo.call("log", "-1", "--format=%s", published.commit)
+                    if not await await_approval(
+                        store, "push", number, commit=published.commit, subject=subject
+                    ):
+                        store.finish("CANCELLED")
+                        return
+                    repo.verify_identity(state["identity"])
+                    if store.update(phase="publishing")["status"] == "CANCELLED":
+                        store.finish("CANCELLED")
+                        return
                 store.event("push_started", commit=published.commit)
-                pushed = repo.publish(
-                    published.commit,
-                    identity["head"],
-                    toolchain.push_environment(paths, config),
-                )
+                pushed = repo.publish(published.commit, identity["head"], environment)
                 fixes = FixResult(**fixes.model_dump(), commit=pushed, pushed=True)
                 write_json(pass_dir / "metadata.json", redact(fixes.model_dump()))
                 repo.verify_identity(state["identity"])

@@ -1,4 +1,5 @@
 import re
+import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -101,6 +102,20 @@ class Repository:
     def head(self) -> str:
         return self.call("rev-parse", "HEAD")
 
+    def worktree_tree(self, env: dict[str, str]) -> str:
+        """The Git tree a commit of every uncommitted change would hold: tracked edits and
+        untracked, non-ignored files with their modes and types. It is built in a temporary
+        index, so the real index stays untouched. env must find the repository's clean
+        filters, such as git-lfs, like the environment for LXReview's own push."""
+        with tempfile.TemporaryDirectory() as scratch:
+            env = {**env, "GIT_INDEX_FILE": f"{scratch}/index"}
+            self.call("read-tree", "HEAD", env=env)
+            self.call("add", "--all", env=env)
+            return self.call("write-tree", env=env)
+
+    def tree(self, commit: str) -> str:
+        return self.call("rev-parse", f"{commit}^{{tree}}")
+
     def audit_root(self) -> Path:
         return (
             Path(self.call("rev-parse", "--path-format=absolute", "--git-common-dir"))
@@ -197,8 +212,19 @@ class Repository:
                 timeout=120,
                 env=env,
             )
-            commit = self.head()
-        _, remote, refspec = self.push_command()[1:]
+            # The amend signs whatever HEAD is now: it must still be the validated change.
+            signed = self.head()
+            if (
+                self.call("rev-list", "--count", f"{base}..{signed}") != "1"
+                or self.call("rev-parse", f"{signed}^") != base
+                or self.tree(signed) != self.tree(commit)
+            ):
+                raise LXError(
+                    Category.UNSAFE, "HEAD moved while the commit was signed; nothing was pushed"
+                )
+            commit = signed
+        command = self.push_command(commit, base)
+        remote = command[-2]
         try:
             if self._lfs() and self.call("lfs", "ls-files", "--name-only"):
                 run(
@@ -209,7 +235,7 @@ class Repository:
                     env=env,
                 )
             run(
-                [self.git, "push", "--no-verify", remote, refspec],
+                [self.git, "push", "--no-verify", *command[2:]],
                 self.paths,
                 cwd=self.path,
                 timeout=600,
@@ -227,14 +253,23 @@ class Repository:
         attributes = self.path / ".gitattributes"
         return attributes.is_file() and "filter=lfs" in attributes.read_text(errors="replace")
 
-    def push_command(self) -> list[str]:
-        """The only push the worker may run: the current branch to its upstream, by refspec.
+    def push_command(self, commit: str, base: str) -> list[str]:
+        """The only push LXReview runs: commit to the upstream branch, by refspec.
 
         An explicit refspec pushes exactly one branch whatever push.default or
-        remote.*.push say, so no user Git configuration has to change.
+        remote.*.push say, so no user Git configuration has to change. Naming the commit
+        rather than HEAD pushes what was checked even if HEAD moves meanwhile, and the
+        lease fails the push when the branch no longer holds base, for example after it
+        was deleted or reset while the run waited for approval.
         """
         remote, ref = self.call("rev-parse", "--abbrev-ref", "@{upstream}").split("/", 1)
-        return ["git", "push", remote, f"HEAD:refs/heads/{ref}"]
+        return [
+            "git",
+            "push",
+            f"--force-with-lease=refs/heads/{ref}:{base}",
+            remote,
+            f"{commit}:refs/heads/{ref}",
+        ]
 
     def preflight(self, target: str, *, settle: float = 0) -> dict:
         """Verify the review checkpoint; wait up to `settle` s for the PR/MR ref to catch up."""

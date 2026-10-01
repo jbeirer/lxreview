@@ -14,7 +14,7 @@ LXReview began on LXPLUS and handles its particulars (AFS homes, CVMFS toolchain
 ## Why LXReview?
 
 - **Independent review** — ChatGPT reads the PR on GitHub or the MR on GitLab rather than relying on Claude's description of its work.
-- **Automatic fix/review loop** — accepted findings can be fixed, checked, committed, pushed and reviewed again.
+- **Automatic fix/review loop** — accepted findings can be fixed, checked, committed, pushed and reviewed again, on their own or after you approve each commit or push.
 - **Persistent runs** — reviews keep running after you close the Claude chat.
 - **Visible decisions** — follow findings, accept/reject reasons, edits, checks, commits and subsequent passes.
 - **Uses existing subscriptions** — sign into ChatGPT normally; no OpenAI API key or API credits are required.
@@ -102,9 +102,27 @@ The branch must be pushed to its upstream and have an open PR or MR that ChatGPT
 1. ChatGPT independently reviews the current PR in a fresh Temporary Chat.
 2. Claude evaluates substantial findings and eligible non-blocking findings against the code and PR discussion, including decisions already settled there.
 3. Claude runs the project's relevant checks on the unchanged code, implements accepted fixes, then checks again.
-4. Claude commits the fixes; LXReview pushes them and asks ChatGPT to review the updated PR.
+4. Claude commits the fixes; LXReview pushes them and asks ChatGPT to review the updated PR. Either step can [wait for your approval](#approving-commits-and-pushes).
 
 New check failures block publication. Pre-existing failures and checks that cannot run are reported. See [review decisions and verification](docs/OPERATIONS.md#review-decisions-and-verification) for the detailed policy.
+
+## Approving commits and pushes
+
+By default the loop commits and pushes accepted fixes on its own. To check them first, have the run wait for your approval before each commit, each push, or both:
+
+```text
+/review-loop --push ask                 # commit automatically, ask before each push
+/review-loop --commit ask --push ask    # ask before each commit and before each push
+```
+
+When the run reaches that step, it pauses and the chat following it asks you. You can also answer from any terminal on the same host:
+
+| The run waits to | What you can inspect | Approve | Decline |
+| --- | --- | --- | --- |
+| Commit | The checked changes, uncommitted in your checkout | `lxreview approve <run-id> commit` | `lxreview stop <run-id>` |
+| Push | One new local commit | `lxreview approve <run-id> push` | `lxreview stop <run-id>` |
+
+`lxreview show <run-id> --pass <n>` shows the pass's findings, diff and checks. Declining stops the run and leaves the changes or the commit to you; to continue reviewing after you push it yourself, run `lxreview resume <run-id>`. Leave the checkout untouched while the run waits, because a commit must contain exactly the checked change. To make approval your default, see [Configuration](docs/CONFIGURATION.md#commits-and-pushes).
 
 ## Following and controlling a run
 
@@ -117,6 +135,7 @@ Replace `<run-id>` with the ID returned at startup; `lxreview runs` lists IDs an
 | Follow | `/review-watch <run-id>` | `lxreview watch <run-id>` |
 | Check status | `/review-status <run-id>` | `lxreview status <run-id>` |
 | Inspect pass 1 | `/review-show <run-id> 1` | `lxreview show <run-id> --pass 1` |
+| Approve a waiting commit or push | `/review-approve <run-id> commit\|push` | `lxreview approve <run-id> commit\|push` |
 | Stop | `/review-stop <run-id>` | `lxreview stop <run-id>` |
 | Resume | `/review-resume <run-id>` | `lxreview resume <run-id>` |
 
@@ -124,7 +143,7 @@ Resume is for failed, cancelled or interrupted runs and requires a clean, pushed
 
 ### One run at a time
 
-LXReview reviews one run at a time per host, even across repositories: a run keeps the ChatGPT browser for its whole duration, including while Claude evaluates and fixes. While a run is active, `run` and `resume` refuse and name it. Wait for it to finish, or stop it with `lxreview stop <run-id>`. `doctor` also reports the browser as busy until the run ends.
+LXReview reviews one run at a time per host, even across repositories: a run keeps the ChatGPT browser for its whole duration, including while Claude evaluates and fixes and while the run waits for your approval. While a run is active, `run` and `resume` refuse and name it. Wait for it to finish, or stop it with `lxreview stop <run-id>`. `doctor` also reports the browser as busy until the run ends.
 
 ## Choosing models
 

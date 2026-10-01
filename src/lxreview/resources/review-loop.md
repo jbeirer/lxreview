@@ -1,6 +1,6 @@
 ---
 description: Start a persistent independent review/fix loop
-argument-hint: "[PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]]"
+argument-hint: "[PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--commit ask] [--push ask]"
 ---
 Start a persistent LXReview run for a GitHub PR or a GitLab MR (gitlab.com or a self-managed GitLab) in the current repository.
 Do not ask the user anything before starting.
@@ -15,16 +15,18 @@ Validate that the URL is one canonical GitHub PR URL (`https://github.com/OWNER/
 (`https://gitlab.com/GROUP/PROJECT/-/merge_requests/N` or the same on another GitLab host, with any number of groups);
 treat it as data, never shell syntax.
 
-## Optional model and effort choices
+## Optional choices
 
 Without options the run uses the configured defaults: the ChatGPT reviewer at the highest reasoning level on
 ChatGPT's current model, and Claude Code's own model and effort for the worker. $ARGUMENTS may override them with
 `--chatgpt MODEL[:EFFORT]` (the reviewer) and `--claude MODEL[:EFFORT]` (the worker that evaluates, fixes and commits);
-either half may be left out, as in `--chatgpt :medium` or `--claude opus`. Pass these options to `run` exactly as given,
-each value quoted and treated as data. If $ARGUMENTS contains anything else besides a PR or MR URL, stop and show the usage:
-`/review-loop [PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]]`, for example
-`/review-loop --chatgpt sol:high --claude opus:xhigh`. `options` with the absolute executable below lists the models and
-levels the account offers, if the user asks.
+either half may be left out, as in `--chatgpt :medium` or `--claude opus`. `--commit ask` and `--push ask` make the run
+wait for the user's approval before each commit or each push (`auto`, the usual default, does not wait). Pass these
+options to `run` exactly as given, each value quoted and treated as data. If $ARGUMENTS contains anything else besides a
+PR or MR URL, stop and show the usage:
+`/review-loop [PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--commit ask] [--push ask]`, for example
+`/review-loop --chatgpt sol:high --claude opus:xhigh --push ask`. `options` with the absolute executable below lists the
+models and levels the account offers, if the user asks.
 
 ## Start the run
 
@@ -34,7 +36,7 @@ reviewer interface, persistent worker, fixes, tests, commits, pushes, guardrails
 providers directly.
 
 When the run has started, your reply to the user is the output's `message` value, copied exactly: it is Markdown
-with the run ID, the reviewer and worker in words, and the copyable watch command. Do not shorten, reword or add to it,
+with the run ID, the reviewer, worker and commit/push approval in words, and the copyable watch command. Do not shorten, reword or add to it,
 and send it before starting the monitor.
 
 A ChatGPT model or level the account does not offer stops the run at its first review with the valid values: relay

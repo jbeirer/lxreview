@@ -76,6 +76,14 @@ class VerifyConfig(Strict):
     test_workers: Literal["auto", "off"] | Annotated[int, Field(ge=1, le=1024)] = "auto"
 
 
+class PublishConfig(Strict):
+    """Whether the worker commits and LXReview pushes on their own, or wait for the user's
+    approval first (`lxreview approve`)."""
+
+    commit: Literal["auto", "ask"] = "auto"
+    push: Literal["auto", "ask"] = "auto"
+
+
 class RuntimeConfig(Strict):
     claude: str = ""
     host: str = ""
@@ -83,13 +91,15 @@ class RuntimeConfig(Strict):
     supervisor: Literal["systemd", "tmux-scope", "launchd"] = "systemd"
 
 
-# Per-run choices (`lxreview run --chatgpt MODEL:EFFORT --claude MODEL:EFFORT`) and the
-# settings they override.
+# Per-run choices (`lxreview run --chatgpt MODEL:EFFORT --claude MODEL:EFFORT --commit ask
+# --push ask`) and the settings they override.
 CHOICES = {
     "reviewer_model": ("reviewer", "model"),
     "reviewer_effort": ("reviewer", "reasoning_effort"),
     "worker_model": ("worker", "model"),
     "worker_effort": ("worker", "effort"),
+    "commit": ("publish", "commit"),
+    "push": ("publish", "push"),
 }
 # Claude Code's model aliases and effort levels (claude --help); full names also work.
 WORKER_MODELS = ("opus", "sonnet", "haiku", "fable")
@@ -105,19 +115,18 @@ class Config(Strict):
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
+    publish: PublishConfig = Field(default_factory=PublishConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
     def with_choices(self, choices: dict) -> "Config":
-        """This configuration with a run's own model and effort choices, validated."""
+        """This configuration with a run's own choices, validated."""
         chosen = self.model_copy(deep=True)
         try:
             for key, value in choices.items():
                 section, field = CHOICES[key]
                 setattr(getattr(chosen, section), field, value)
         except (KeyError, ValidationError) as exc:
-            raise LXError(
-                Category.CONFIG, f"Invalid model or effort choice: {key}={value!r}"
-            ) from exc
+            raise LXError(Category.CONFIG, f"Invalid run choice: {key}={value!r}") from exc
         return chosen
 
     @classmethod
