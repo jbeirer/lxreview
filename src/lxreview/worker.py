@@ -369,6 +369,27 @@ def command_guidance(config: Config) -> str:
     return text
 
 
+# Seconds between checks for the user's approval of a commit or push.
+APPROVAL_POLL = 2
+
+
+async def await_approval(store: RunStore, step: str, number: int, **detail) -> bool:
+    """Wait until the user approves this step (`lxreview approve`); False when the run is
+    stopped instead. A stop also ends the worker's unit, which cancels this wait."""
+    store.update(phase=f"awaiting_{step}", awaiting=step, approved=None)
+    store.event("approval_requested", pass_number=number, run_id=store.id, step=step, **detail)
+    try:
+        while store.load().get("approved") != step:
+            if (store.directory / "cancel").exists():
+                return False
+            await asyncio.sleep(APPROVAL_POLL)
+    finally:
+        # A stopped run must not leave a stale request that a resumed run could approve.
+        store.update(awaiting=None, approved=None)
+    store.event("approval_granted", pass_number=number, step=step)
+    return True
+
+
 async def settled_preflight(repo: Repository, target: str, settle: float = 60) -> dict:
     """Preflight that waits for a lagging PR/MR ref without blocking signal handling."""
     deadline = time.monotonic() + settle
@@ -611,6 +632,25 @@ async def execute(
                 repo.verify_identity(state["identity"])
                 if repo.head() != identity["head"]:
                     raise LXError(Category.UNSAFE, "HEAD changed during the edit/test phase")
+                if config.publish.commit == "ask":
+                    # The commit must hold exactly the checked change.
+                    checked = repo.worktree_fingerprint()
+                    changed = sorted(
+                        {
+                            *repo.call("diff", "--name-only", "HEAD").splitlines(),
+                            *repo.call("ls-files", "--others", "--exclude-standard").splitlines(),
+                        }
+                    )
+                    if not await await_approval(store, "commit", number, files=changed):
+                        store.finish("CANCELLED")
+                        return
+                    repo.verify_identity(state["identity"])
+                    if repo.head() != identity["head"]:
+                        raise LXError(Category.UNSAFE, "HEAD changed while waiting for approval")
+                    if repo.worktree_fingerprint() != checked:
+                        raise LXError(
+                            Category.UNSAFE, "The working tree changed while waiting for approval"
+                        )
                 store.update(phase="publishing")
                 published = await turn(
                     paths,
@@ -621,6 +661,15 @@ async def execute(
                     read_only=False,
                 )
                 assert isinstance(published, PublishResult)
+                if config.publish.push == "ask":
+                    subject = repo.call("log", "-1", "--format=%s", published.commit)
+                    if not await await_approval(
+                        store, "push", number, commit=published.commit, subject=subject
+                    ):
+                        store.finish("CANCELLED")
+                        return
+                    repo.verify_identity(state["identity"])
+                    store.update(phase="publishing")
                 store.event("push_started", commit=published.commit)
                 pushed = repo.publish(
                     published.commit,

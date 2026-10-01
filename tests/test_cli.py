@@ -421,9 +421,9 @@ def test_options_are_read_live_and_fall_back_to_the_last_check_while_busy(paths,
     ],
 )
 def test_model_and_effort_options_split_into_run_choices(chatgpt, claude, expected):
-    from lxreview.cli import model_choices
+    from lxreview.cli import run_choices
 
-    assert model_choices(chatgpt, claude) == expected
+    assert run_choices(chatgpt, claude) == expected
 
 
 def test_the_stream_lists_findings_and_colors_a_clean_outcome_green():
@@ -589,6 +589,62 @@ def test_run_describes_its_choices_in_words(choices, reviewer, worker):
     assert ":" not in "".join(described.values())
 
 
+@pytest.mark.parametrize(
+    ("choices", "publishing"),
+    [
+        ({}, "automatic"),
+        ({"push": "ask"}, "commits automatically, pushes after your approval"),
+        ({"commit": "ask"}, "commits after your approval, then pushes automatically"),
+        ({"commit": "ask", "push": "ask"}, "each after your approval"),
+    ],
+)
+def test_run_describes_commit_and_push_approval(choices, publishing):
+    from lxreview.cli import _described
+    from lxreview.config import Config
+
+    assert _described(Config().with_choices(choices))["publishing"] == publishing
+
+
+def test_commit_and_push_options_become_run_choices():
+    from lxreview.cli import run_choices
+    from lxreview.config import Config
+
+    choices = run_choices("", "opus", commit="ask", push="auto")
+    assert choices == {"worker_model": "opus", "commit": "ask", "push": "auto"}
+    assert Config().with_choices(choices).publish.commit == "ask"
+    with pytest.raises(LXError, match="Invalid run choice: push='later'"):
+        Config().with_choices(run_choices("", "", push="later"))
+
+
+def test_approve_names_the_step_the_run_waits_for(paths, tmp_path, monkeypatch):
+    from lxreview.config import Config
+    from lxreview.runs import RunStore
+
+    monkeypatch.setenv("LXREVIEW_HOME", str(paths.root))
+    Config().save(paths)
+    monkeypatch.setattr(RunStore, "observed", lambda self, config: self.load())
+    identity = {"head": "a" * 40, "branch": "f", "upstream": "origin/f", "remote_url": "u"}
+    store = RunStore.create(
+        paths, tmp_path, "https://github.com/org/repo/pull/1", identity, 5, tmp_path / "audit"
+    )
+    store.update(status="RUNNING")
+    result = runner.invoke(app, ["approve", store.id, "commit"])
+    assert "is not waiting for approval to commit" in str(result.exception)
+    store.update(awaiting="push")
+    # A repeated or stale approval of the commit never lets the push through.
+    result = runner.invoke(app, ["approve", store.id, "commit"])
+    assert "it waits for approval to push" in str(result.exception)
+    assert "approved" not in store.load()
+    result = runner.invoke(app, ["approve", store.id, "merge"])
+    assert "Approve commit or push" in str(result.exception)
+    result = runner.invoke(app, ["approve", store.id, "push"])
+    assert result.exit_code == 0 and f"Approved the push for {store.id}" in result.output
+    assert store.load()["approved"] == "push"
+    store.finish("CANCELLED")
+    result = runner.invoke(app, ["approve", store.id, "push"])
+    assert "is not waiting for approval to push" in str(result.exception)
+
+
 def test_one_active_run_at_a_time_across_repositories(paths, tmp_path, monkeypatch):
     import lxreview.process as process
     from lxreview.cli import _refuse_while_active
@@ -619,13 +675,15 @@ def test_run_announcement_is_ready_to_relay():
     described = {
         "reviewer": "ChatGPT (sol), medium reasoning",
         "worker": "Claude (opus), xhigh effort",
+        "publishing": "commits automatically, pushes after your approval",
     }
     text = _announcement(
         "lr-1", "https://github.com/org/repo/pull/1", described, "lxreview watch lr-1"
     )
     assert text.startswith("Started review run `lr-1` for https://github.com/org/repo/pull/1.\n")
     assert (
-        "- Reviewer: ChatGPT (sol), medium reasoning\n- Worker: Claude (opus), xhigh effort" in text
+        "- Reviewer: ChatGPT (sol), medium reasoning\n- Worker: Claude (opus), xhigh effort\n"
+        "- Commits and pushes: commits automatically, pushes after your approval\n" in text
     )
     assert "`/review-stop lr-1`" in text
     assert "```bash\nlxreview watch lr-1\n```" in text

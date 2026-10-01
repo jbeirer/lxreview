@@ -23,6 +23,7 @@ The run is a supervised background worker. Closing Claude Code, VS Code or SSH d
 | Inspect a pass | `lxreview show <run-id> --pass 1` |
 | Export a report to a new file | `lxreview report <run-id> --output review-report.md` |
 | Read worker output | `lxreview logs <run-id>` |
+| Approve a waiting commit or push | `lxreview approve <run-id> commit` or `push` |
 | Cancel a run | `lxreview stop <run-id>` |
 | Resume a run | `lxreview resume <run-id>` |
 
@@ -44,7 +45,7 @@ Claude evaluates every substantial finding against the code and the PR or MR des
 
 | Finding or outcome | Behavior |
 | --- | --- |
-| Accepted substantial finding | Fix, verify, commit, push and review again, if another pass remains |
+| Accepted substantial finding | Fix, verify, commit, push (each after your approval when configured) and review again, if another pass remains |
 | Non-blocking finding | Accept only a small, useful change within the PR's scope; no speculative refactors or style-only changes |
 | Non-blocking fixes alone | At most one such fix pass per run, followed by independent review |
 | Final-pass accepted substantial finding | Finish as `MAX_PASSES`, without unreviewed edits |
@@ -61,6 +62,8 @@ Verification follows the project's CI configuration and contributor documentatio
 Checks run one literal command at a time, offline, in Claude Code's sandbox. Environment customization belongs in [Configuration](CONFIGURATION.md#verification-environment); command and filesystem restrictions belong in [Security](../SECURITY.md).
 
 Claude commits in a separate restricted turn, with commit hooks inside the sandbox. LXReview signs when Git configuration requires it and pushes outside the sandbox using normal Git credentials, including SSH agents, keychains, credential helpers and Git LFS. The explicit upstream refspec makes `push.default` and configured push refspecs irrelevant; pre-push hooks are skipped. Push URLs, URL rewrites, mirror remotes, hook paths and external diff settings that violate publication policy stop the run. `doctor` reports problematic global settings.
+
+With `commit = "ask"` or `push = "ask"` ([configuration](CONFIGURATION.md#commits-and-pushes)), or `--commit ask` / `--push ask` for one run, the run pauses before that step. `lxreview status <run-id>` and the timeline say what it waits for, and the run keeps the browser reserved meanwhile. `lxreview approve <run-id> commit` (or `push`) lets it continue; an approval names the step, so it never lets a later step through. The commit must contain exactly the checked change: if the working tree changed while the run waited, the run stops instead of committing. Declining is `lxreview stop <run-id>`, which keeps the uncommitted changes or the local commit; push the commit yourself to resume from it.
 
 A failed push leaves the commit locally and stops the run. Correct the underlying problem and establish a clean, pushed checkpoint before resuming; do not disable the sandbox to work around a failure.
 

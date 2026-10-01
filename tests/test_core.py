@@ -615,6 +615,34 @@ def test_timeline_separates_preexisting_check_failures():
     assert "pre-existing: test_io: fails identically before the edit" in texts
 
 
+def test_timeline_names_what_waits_for_approval_and_how_to_answer():
+    from lxreview.timeline import PHASES, describe, style
+
+    run = "lr-20261001-120000-0123abcd"
+    commit = {
+        "kind": "approval_requested",
+        "time": "",
+        "run_id": run,
+        "step": "commit",
+        "files": ["src/a.py", "tests/test_a.py"],
+    }
+    texts = [line.split("  ", 1)[-1] for line in describe(commit)]
+    assert (
+        texts[0] == "Waiting for your approval to commit 2 changed files: src/a.py, tests/test_a.py"
+    )
+    assert texts[1] == (
+        f"  approve: lxreview approve {run} commit, or decline: lxreview stop {run}"
+    )
+    assert style(texts[0]) == "bold yellow"
+    push = {**commit, "step": "push", "commit": "b" * 40, "subject": "Fix the parser"}
+    texts = [line.split("  ", 1)[-1] for line in describe(push)]
+    assert texts[0] == "Waiting for your approval to push commit bbbbbbbbbb Fix the parser"
+    assert texts[1].endswith(f"approve {run} push, or decline: lxreview stop {run}")
+    granted = {"kind": "approval_granted", "time": "", "step": "push"}
+    assert describe(granted)[0].endswith("Push approved")
+    assert PHASES["awaiting_push"] == "waiting for your approval to push"
+
+
 def test_scratch_and_session_output_exceptions_do_not_follow_escaping_symlinks(
     tmp_path, monkeypatch
 ):

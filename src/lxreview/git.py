@@ -1,3 +1,5 @@
+import hashlib
+import os
 import re
 import time
 from collections.abc import Iterator
@@ -100,6 +102,18 @@ class Repository:
 
     def head(self) -> str:
         return self.call("rev-parse", "HEAD")
+
+    def worktree_fingerprint(self) -> str:
+        """A digest of every uncommitted change: tracked edits and untracked, non-ignored files."""
+        digest = hashlib.sha256(
+            self.call("diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD").encode()
+        )
+        untracked = self.call("ls-files", "--others", "--exclude-standard", "-z").split("\0")
+        for name in sorted(filter(None, untracked)):
+            path = self.path / name
+            digest.update(name.encode() + b"\0")
+            digest.update(os.readlink(path).encode() if path.is_symlink() else path.read_bytes())
+        return digest.hexdigest()
 
     def audit_root(self) -> Path:
         return (

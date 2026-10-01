@@ -84,6 +84,21 @@ class RunStore:
             self.save(state)
             return state
 
+    def approve(self, step: str) -> None:
+        """Approve the commit or push the worker waits for. Naming the step keeps a repeated
+        or stale approval from letting a later step through."""
+        with lock(self.directory / "state.lock", blocking=True):
+            state = self.load()
+            awaiting = state.get("awaiting") if state["status"] not in TERMINAL else None
+            if awaiting != step:
+                raise LXError(
+                    Category.UNSAFE,
+                    f"Run {self.id} is not waiting for approval to {step}"
+                    + (f"; it waits for approval to {awaiting}" if awaiting else ""),
+                )
+            state["approved"] = step
+            self.save(state)
+
     def observed(self, config) -> dict:
         from .process import Supervisor
 

@@ -9,6 +9,8 @@ PHASES = {
     "evaluation": "Claude evaluating findings",
     "editing_testing": "Claude editing and testing",
     "publishing": "Claude committing and pushing",
+    "awaiting_commit": "waiting for your approval to commit",
+    "awaiting_push": "waiting for your approval to push",
     "finished": "finished",
     "interrupted": "interrupted",
 }
@@ -178,6 +180,22 @@ def describe(
         ]
         texts += [f"  {shorten(test, limit)}" for test in event.get("tests", [])]
         texts += [f"  pre-existing: {shorten(test, limit)}" for test in preexisting]
+    elif kind == "approval_requested":
+        step = event.get("step")
+        if step == "push":
+            what = f"push commit {str(event.get('commit', ''))[:10]} {shorten(event.get('subject', ''), limit)}"
+        else:
+            files = [str(f) for f in event.get("files", [])]
+            what = f"commit {len(files)} changed file{'s' * (len(files) != 1)}" + (
+                f": {shorten(', '.join(files), limit)}" if files else ""
+            )
+        run = event.get("run_id", "<run-id>")
+        texts = [
+            f"Waiting for your approval to {what}",
+            f"  approve: lxreview approve {run} {step}, or decline: lxreview stop {run}",
+        ]
+    elif kind == "approval_granted":
+        texts = [f"{str(event.get('step', '')).capitalize()} approved"]
     elif kind == "push_started":
         texts = [f"Pushing commit {str(event.get('commit', ''))[:10]}"]
     elif kind == "fixes_pushed":
@@ -217,6 +235,7 @@ def style(text: str) -> str:
         ("Checks PASS", "bold green"),
         ("Checks FAIL", "bold red"),
         ("  ", "dim"),
+        ("Waiting for your approval", "bold yellow"),
         ("Commit ", "bold green"),
         ("Finished: CLEAN", "bold green"),
         ("Finished: NO_VALID_SUBSTANTIAL_FINDINGS", "bold green"),

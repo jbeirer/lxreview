@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 from pathlib import Path
@@ -37,6 +38,11 @@ class Repo:
 
     def head(self):
         return self.head_value
+
+    fingerprint = "checked tree"
+
+    def worktree_fingerprint(self):
+        return self.fingerprint
 
     def call(self, *args):
         return "diff --git a/file b/file\n+fix"
@@ -402,7 +408,7 @@ def test_the_reviewer_sets_the_highest_reasoning_by_default():
 
 def test_the_reviewer_level_is_always_chosen_explicitly(paths):
     # ChatGPT keeps the last level on the account; "leave it" would inherit an earlier run's.
-    with pytest.raises(LXError, match="Invalid model or effort choice"):
+    with pytest.raises(LXError, match="Invalid run choice"):
         Config().with_choices({"reviewer_effort": "default"})
     paths.config.write_text('schema_version = 1\n[reviewer]\nreasoning_effort = "default"\n')
     with pytest.raises(LXError, match="reviewer.reasoning_effort"):
@@ -501,3 +507,101 @@ async def test_final_pass_reports_polish_instead_of_editing(paths, tmp_path, mon
     assert len(prompts) == 1
     events = (store.directory / "events.jsonl").read_text()
     assert '"polish_skipped"' in events and '"N1"' in events
+
+
+class PushRecorder(Repo):
+    pushed: list[str] = []
+
+    def publish(self, commit, base, env):
+        PushRecorder.pushed.append(commit)
+        return super().publish(commit, base, env)
+
+
+async def approval_requested(store, step):
+    for _ in range(500):
+        if store.load().get("awaiting") == step:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"The run never asked for approval to {step}")
+
+
+def kinds(store):
+    lines = (store.directory / "events.jsonl").read_text().splitlines()
+    return [json.loads(line)["kind"] for line in lines]
+
+
+@pytest.fixture
+def waiting(monkeypatch):
+    monkeypatch.setattr("lxreview.worker.Repository", PushRecorder)
+    monkeypatch.setattr("lxreview.worker.APPROVAL_POLL", 0.01)
+    monkeypatch.setattr(PushRecorder, "pushed", [])
+    Repo.head_value = "a" * 40
+
+
+async def test_commit_and_push_wait_for_approval(paths, tmp_path, waiting):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES", "VERDICT: CLEAN"])
+    config = Config().with_choices({"commit": "ask", "push": "ask"})
+    run = asyncio.create_task(
+        execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    )
+    await approval_requested(store, "commit")
+    # Evaluated and fixed, but nothing committed yet.
+    assert len(prompts) == 2 and store.load()["phase"] == "awaiting_commit"
+    with pytest.raises(LXError, match="it waits for approval to commit"):
+        store.approve("push")
+    store.approve("commit")
+    await approval_requested(store, "push")
+    assert len(prompts) == 3 and not PushRecorder.pushed
+    store.approve("push")
+    await run
+    state = store.load()
+    assert state["status"] == "CLEAN" and state["awaiting"] is None
+    assert PushRecorder.pushed == ["b" * 40]
+    approvals = [kind for kind in kinds(store) if kind.startswith("approval")]
+    assert approvals == ["approval_requested", "approval_granted"] * 2
+
+
+async def test_automatic_runs_never_wait(paths, tmp_path, waiting):
+    store = create(paths, tmp_path)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES", "VERDICT: CLEAN"])
+    await execute(paths, Config(), store, reviewer, fixing_turn(lambda i: "ACCEPTED", []))
+    assert store.load()["status"] == "CLEAN" and PushRecorder.pushed == ["b" * 40]
+    assert not any(kind.startswith("approval") for kind in kinds(store))
+
+
+@pytest.mark.parametrize(("step", "turns"), [("commit", 2), ("push", 3)])
+async def test_declining_stops_the_run_and_keeps_the_work(paths, tmp_path, waiting, step, turns):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    config = Config().with_choices({step: "ask"})
+    run = asyncio.create_task(
+        execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    )
+    await approval_requested(store, step)
+    (store.directory / "cancel").touch()
+    await run
+    state = store.load()
+    assert state["status"] == "CANCELLED" and state["awaiting"] is None
+    # The checked edits (or the local commit) stay; nothing more happens.
+    assert len(prompts) == turns and not PushRecorder.pushed
+
+
+async def test_a_commit_holds_exactly_the_checked_change(paths, tmp_path, waiting, monkeypatch):
+    store = create(paths, tmp_path)
+    prompts = []
+    reviewer = Reviewer(["SUBSTANTIAL [S1] bug\nVERDICT: SUBSTANTIAL_ISSUES"])
+    config = Config().with_choices({"commit": "ask"})
+    run = asyncio.create_task(
+        execute(paths, config, store, reviewer, fixing_turn(lambda i: "ACCEPTED", prompts))
+    )
+    await approval_requested(store, "commit")
+    monkeypatch.setattr(Repo, "fingerprint", "edited while waiting")
+    store.approve("commit")
+    await run
+    state = store.load()
+    assert state["status"] == "FAILED"
+    assert "working tree changed while waiting for approval" in state["error"]
+    assert len(prompts) == 2 and not PushRecorder.pushed

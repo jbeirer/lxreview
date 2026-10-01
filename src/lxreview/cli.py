@@ -286,6 +286,23 @@ def _stop(paths: Paths, config: Config, run_id: str = ""):
 
 
 @app.command()
+def approve(
+    run_id: str,
+    step: str = typer.Argument(..., help="The step the run waits for: commit or push."),
+):
+    """Let a run that waits for your approval commit or push."""
+    paths, config = context()
+    if step not in ("commit", "push"):
+        raise LXError(Category.CONFIG, "Approve commit or push")
+    store = RunStore(paths, run_id)
+    state = store.observed(config)
+    if state["host"] != socket.getfqdn():
+        raise LXError(Category.UNAVAILABLE, f"Approve this run on {state['host']}")
+    store.approve(step)
+    output(f"Approved the {step} for {run_id}")
+
+
+@app.command()
 def restart():
     stop(run_id="")
     start()
@@ -328,8 +345,9 @@ def choice_options(json_output: bool = typer.Option(False, "--json")):
     )
 
 
-def model_choices(chatgpt: str, claude: str) -> dict:
-    """`--chatgpt MODEL[:EFFORT]` and `--claude MODEL[:EFFORT]` as per-run choices."""
+def run_choices(chatgpt: str, claude: str, commit: str = "", push: str = "") -> dict:
+    """`--chatgpt MODEL[:EFFORT]`, `--claude MODEL[:EFFORT]`, `--commit` and `--push` as
+    per-run choices."""
     choices = {}
     for role, value in (("reviewer", chatgpt), ("worker", claude)):
         model, _, effort = value.partition(":")
@@ -337,6 +355,9 @@ def model_choices(chatgpt: str, claude: str) -> dict:
             choices[f"{role}_model"] = model.strip()
         if effort.strip():
             choices[f"{role}_effort"] = effort.strip()
+    for step, value in (("commit", commit), ("push", push)):
+        if value.strip():
+            choices[step] = value.strip()
     return choices
 
 
@@ -349,13 +370,15 @@ def start_run(
         "", help="Reviewer MODEL[:EFFORT] for this run, e.g. sol:high or :medium (see options)."
     ),
     claude: str = typer.Option("", help="Worker MODEL[:EFFORT] for this run, e.g. opus:xhigh."),
+    commit: str = typer.Option("", help="auto, or ask to wait for approval before each commit."),
+    push: str = typer.Option("", help="auto, or ask to wait for approval before each push."),
 ):
     """Start a detached autonomous Claude review/fix worker."""
     from .contracts import ReviewRequest
     from .git import Repository
 
     paths, config = context()
-    choices = model_choices(chatgpt, claude)
+    choices = run_choices(chatgpt, claude, commit, push)
     chosen = config.with_choices(choices)
     with lock(paths.root / "state/setup.lock"):
         repository = Repository(repo, paths)
@@ -418,7 +441,8 @@ def _announcement(run_id: str, target: str, described: dict[str, str], watch: st
     return (
         f"Started review run `{run_id}` for {target}.\n"
         f"- Reviewer: {described['reviewer']}\n"
-        f"- Worker: {described['worker']}\n\n"
+        f"- Worker: {described['worker']}\n"
+        f"- Commits and pushes: {described['publishing']}\n\n"
         f"It runs in the background, so closing this chat does not stop it; `/review-stop {run_id}` does.\n"
         "To follow every step in full in a terminal (reviews, each finding's decision and reason,"
         " commands, tests, commits):\n\n"
@@ -436,9 +460,16 @@ def _described(config: Config) -> dict[str, str]:
     else:
         model = "default model" if worker.model == "default" else worker.model
         claude = f"Claude ({model}), {worker.effort} effort"
+    publishing = {
+        ("auto", "auto"): "automatic",
+        ("auto", "ask"): "commits automatically, pushes after your approval",
+        ("ask", "auto"): "commits after your approval, then pushes automatically",
+        ("ask", "ask"): "each after your approval",
+    }[config.publish.commit, config.publish.push]
     return {
         "reviewer": f"ChatGPT ({chatgpt}), {reviewer.reasoning_effort} reasoning",
         "worker": claude,
+        "publishing": publishing,
     }
 
 

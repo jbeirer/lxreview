@@ -269,6 +269,31 @@ def test_preflight_waits_only_for_lagging_pull_ref(repo, monkeypatch):
         repository.preflight("https://gitlab.com/org/repo/-/merge_requests/12")
 
 
+def test_worktree_fingerprint_sees_every_uncommitted_change(repo):
+    repository, git = repo
+    (repository.path / "tracked.txt").write_text("one\n")
+    (repository.path / ".gitignore").write_text("*.log\n")
+    git("add", "tracked.txt", ".gitignore")
+    git("commit", "-m", "tracked")
+    clean = repository.worktree_fingerprint()
+    (repository.path / "build.log").write_text("ignored output")
+    assert repository.worktree_fingerprint() == clean
+    (repository.path / "tracked.txt").write_text("two\n")
+    edited = repository.worktree_fingerprint()
+    assert edited != clean
+    git("add", "tracked.txt")
+    assert repository.worktree_fingerprint() == edited
+    new = repository.path / "new.py"
+    new.write_text("a = 1\n")
+    added = repository.worktree_fingerprint()
+    assert added != edited
+    new.write_text("a = 2\n")
+    assert repository.worktree_fingerprint() != added
+    new.unlink()
+    git("checkout", "HEAD", "--", "tracked.txt")
+    assert repository.worktree_fingerprint() == clean
+
+
 def test_sandbox_placeholders_stay_out_of_git_status_only_during_a_run(repo):
     repository, git = repo
     exclude = repository.path / ".git/info/exclude"
