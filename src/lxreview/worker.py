@@ -57,6 +57,25 @@ class FixResult(EditResult, PublishResult):
     pushed: bool
 
 
+class TurnResult(BaseModel):
+    """The structured output schema of every turn; each turn fills only its own part.
+
+    Turns resume one Claude session. A different tool list or output schema invalidates the
+    prompt cache, so every turn would send the whole session again at the cache write price.
+    All turns therefore get the same tools and schema; the guard and the sandbox enforce each
+    phase's restrictions.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    evaluation: Evaluation | None = None
+    edit: EditResult | None = None
+    publish: PublishResult | None = None
+
+
+TOOLS = "Read,Glob,Grep,Edit,Write,Bash,StructuredOutput"
+PARTS = {"evaluate": "evaluation", "edit": "edit", "publish": "publish"}
+
+
 # Parent of each turn's private directory: short, and outside the installation root.
 SCRATCH = "/tmp"
 
@@ -103,9 +122,14 @@ async def claude_turn(
     work.mkdir(mode=0o700)
     git_common = Path(state["audit"]).parent.parent
     phase = "evaluate" if read_only else "publish" if schema is PublishResult else "edit"
-    hook_cmd = shlex.join(
-        [str(paths.executable), "guard", "--repo", str(repo), "--phase", phase]
-        + (["--scratch", str(work)] if phase == "edit" else [])
+    # Claude Code runs the tool when a hook fails with any status other than 2, so a guard
+    # that cannot run (a crash, a missing executable) must still block.
+    hook_cmd = (
+        shlex.join(
+            [str(paths.executable), "guard", "--repo", str(repo), "--phase", phase]
+            + (["--scratch", str(work)] if phase == "edit" else [])
+        )
+        + " || exit 2"
     )
     write_json(
         settings_file,
@@ -142,9 +166,10 @@ async def claude_turn(
                     # attributes, identity) although ~/.config as a whole is secret.
                     "allowRead": [str(Path.home() / ".config/git")],
                     "denyRead": secret_read_paths(paths),
-                    "denyWrite": (
-                        [str(git_common), str(repo / ".git")] if phase != "publish" else []
-                    )
+                    # Evaluation sees the shared tool list (see TurnResult): the guard refuses
+                    # anything but reads, and the repository stays read-only for commands.
+                    "denyWrite": ([str(repo)] if phase == "evaluate" else [])
+                    + ([str(git_common), str(repo / ".git")] if phase != "publish" else [])
                     + [
                         str(paths.root),
                         str(repo / ".git/config"),
@@ -168,13 +193,6 @@ async def claude_turn(
             },
         },
     )
-    tools = (
-        "Read,Glob,Grep,StructuredOutput"
-        if read_only
-        else "Read,Glob,Grep,Bash,StructuredOutput"
-        if phase == "publish"
-        else "Read,Glob,Grep,Edit,Write,Bash,StructuredOutput"
-    )
     argv = [
         str(executable(config.runtime.claude)),
         "-p",
@@ -190,10 +208,10 @@ async def claude_turn(
         "--mcp-config",
         '{"mcpServers":{}}',
         "--tools",
-        tools,
+        TOOLS,
         "--disable-slash-commands",
         "--json-schema",
-        json.dumps(schema.model_json_schema()),
+        json.dumps(TurnResult.model_json_schema()),
     ]
     if config.worker.model != "default":
         argv += ["--model", config.worker.model]
@@ -245,13 +263,19 @@ async def claude_turn(
         store.update(claude_pid=process.pid)
         assert process.stdin and process.stdout
         async with asyncio.timeout(config.review.worker_timeout):
-            if not read_only:
+            if read_only:
+                prompt += "\n\nThis turn is read-only: use only the Read, Glob and Grep tools."
+            else:
                 # Commands expand no variables, so name the scratch area literally.
                 prompt += (
                     f"\n\nWritable scratch directory for build output and other temporary"
                     f" files: {work} (use this literal path; nothing outside the repository"
                     " and this directory is writable)."
                 )
+            prompt += (
+                f"\n\nReturn this turn's result as the `{PARTS[phase]}` field of the"
+                " structured output and leave out the other fields."
+            )
             process.stdin.write(prompt.encode())
             await process.stdin.drain()
             process.stdin.close()
@@ -279,7 +303,9 @@ async def claude_turn(
                         raise LXError(
                             Category.PROTOCOL, "Claude reported a failed turn; inspect run logs"
                         )
-                    result = event.get("structured_output")
+                    output = event.get("structured_output")
+                    if isinstance(output, dict):
+                        result = output.get(PARTS[phase])
             code = await process.wait()
             await err_task
         if code != 0 or result is None:

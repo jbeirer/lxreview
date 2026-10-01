@@ -55,7 +55,7 @@ open(os.path.join(os.environ['LXREVIEW_HOME'], 'turn-tmpdir'), 'w').write(os.env
 sys.stdin.read()
 print(json.dumps({'type':'system','session_id':str(uuid.uuid4())}),flush=True)
 print(json.dumps({'type':'assistant','message':{'content':[{'type':'thinking','thinking':'PRIVATE_REASONING'},{'type':'text','text':'Checking evidence; Bearer private-token'}]}}),flush=True)
-print(json.dumps({'type':'result','is_error':False,'structured_output':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'guard already exists','evidence':'file.py:3'}]}}),flush=True)
+print(json.dumps({'type':'result','is_error':False,'structured_output':{'evaluation':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'guard already exists','evidence':'file.py:3'}]}}}),flush=True)
 """
     )
     executable.chmod(0o700)
@@ -81,7 +81,7 @@ settings=json.load(open(sys.argv[sys.argv.index('--settings')+1]))
 hook=shlex.split(settings['hooks']['PreToolUse'][0]['hooks'][0]['command'])
 work=re.search(r'Writable scratch directory for build output and other temporary files: (\\S+) ',sys.stdin.read()).group(1)
 assert hook[hook.index('--scratch')+1]==work and os.path.isdir(work)
-print(json.dumps({'type':'result','is_error':False,'structured_output':{'tests':['pytest: PASSED'],'tests_passed':True,'preexisting_failures':[],'summary':'ok'}}),flush=True)
+print(json.dumps({'type':'result','is_error':False,'structured_output':{'edit':{'tests':['pytest: PASSED'],'tests_passed':True,'preexisting_failures':[],'summary':'ok'}}}),flush=True)
 """
     )
     executable.chmod(0o700)
@@ -178,10 +178,9 @@ prompt = sys.stdin.read()
 assert os.environ['TMPDIR'] + '/work' in prompt and os.path.isdir(os.environ['TMPDIR'] + '/work')
 if phase=='edit':
     assert any(path.endswith('.git') for path in settings['sandbox']['filesystem']['denyWrite'])
-    result={'tests':['pytest: passed'],'tests_passed':True,'preexisting_failures':[],'summary':'fixed'}
+    result={'edit':{'tests':['pytest: passed'],'tests_passed':True,'preexisting_failures':[],'summary':'fixed'}}
 else:
-    assert 'Edit' not in sys.argv[sys.argv.index('--tools')+1].split(',')
-    result={'commit':'a'*40}
+    result={'publish':{'commit':'a'*40}}
 sys.stdin.read()
 print(json.dumps({'type':'result','is_error':False,'structured_output':result}),flush=True)
 """
@@ -201,7 +200,7 @@ async def test_worker_model_and_effort_reach_claude_only_when_set(paths, store, 
         + """import sys,json
 open(sys.argv[0] + '.argv', 'w').write(json.dumps(sys.argv))
 sys.stdin.read()
-print(json.dumps({'type':'result','is_error':False,'structured_output':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}}),flush=True)
+print(json.dumps({'type':'result','is_error':False,'structured_output':{'evaluation':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}}}),flush=True)
 """
     )
     executable.chmod(0o700)
@@ -215,3 +214,76 @@ print(json.dumps({'type':'result','is_error':False,'structured_output':{'finding
     argv = json.loads(Path(str(executable) + ".argv").read_text())
     assert argv[argv.index("--model") + 1] == "opus"
     assert argv[argv.index("--effort") + 1] == "xhigh"
+
+
+async def test_every_turn_shares_tools_and_schema_so_the_prompt_cache_survives(paths, tmp_path):
+    from lxreview.worker import EditResult, PublishResult
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    store = RunStore.create(
+        paths,
+        repo,
+        "https://github.com/o/r/pull/1",
+        {"head": "a" * 40},
+        2,
+        repo / ".git/review-loop",
+    )
+    store.update(**{"pass": 1})
+    private_dir(Path(store.load()["audit"]) / "pass-01")
+    executable = tmp_path / "recording-claude"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + """import json,os,re,subprocess,sys
+settings=json.load(open(sys.argv[sys.argv.index('--settings')+1]))
+command=settings['hooks']['PreToolUse'][0]['hooks'][0]['command']
+phase=re.search(r'--phase (\\w+)',command).group(1)
+prompt=sys.stdin.read()
+# The guard executable does not exist here: the hook must block rather than fail open.
+write={'tool_name':'Write','tool_input':{'file_path':'x'},'cwd':os.getcwd()}
+blocked=subprocess.run(['/bin/sh','-c',command],input=json.dumps(write),text=True,capture_output=True).returncode
+record={'tools':sys.argv[sys.argv.index('--tools')+1],'schema':sys.argv[sys.argv.index('--json-schema')+1],
+        'deny_write':settings['sandbox']['filesystem']['denyWrite'],'blocked':blocked,'prompt':prompt}
+open(sys.argv[0]+'.'+phase,'w').write(json.dumps(record))
+parts={'evaluate':{'evaluation':{'findings':[{'finding':'S1','decision':'REJECTED','reason':'r','evidence':'e'}]}},
+       'edit':{'edit':{'tests':['pytest: passed'],'tests_passed':True,'preexisting_failures':[],'summary':'s'}},
+       'publish':{'publish':{'commit':'a'*40}}}
+print(json.dumps({'type':'result','is_error':False,'structured_output':parts[phase]}),flush=True)
+"""
+    )
+    executable.chmod(0o700)
+    config = Config()
+    config.runtime.claude = str(executable)
+    assert not paths.executable.exists()
+    await claude_turn(paths, config, store, "evaluate", Evaluation, read_only=True)
+    await claude_turn(paths, config, store, "edit", EditResult, read_only=False)
+    await claude_turn(paths, config, store, "publish", PublishResult, read_only=False)
+    records = {
+        phase: json.loads(Path(f"{executable}.{phase}").read_text())
+        for phase in ("evaluate", "edit", "publish")
+    }
+    assert len({(r["tools"], r["schema"]) for r in records.values()}) == 1
+    assert all(r["blocked"] == 2 for r in records.values())
+    assert str(repo) in records["evaluate"]["deny_write"]
+    assert str(repo) not in records["edit"]["deny_write"] + records["publish"]["deny_write"]
+    assert "use only the Read, Glob and Grep tools" in records["evaluate"]["prompt"]
+    for phase, part in (("evaluate", "evaluation"), ("edit", "edit"), ("publish", "publish")):
+        assert f"as the `{part}` field" in records[phase]["prompt"]
+
+
+async def test_result_in_another_turns_field_is_refused(paths, store, tmp_path):
+    from lxreview.errors import LXError
+
+    executable = tmp_path / "confused-claude"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        + """import json,sys
+sys.stdin.read()
+print(json.dumps({'type':'result','is_error':False,'structured_output':{'edit':{'tests':['t'],'tests_passed':True,'preexisting_failures':[],'summary':'s'}}}),flush=True)
+"""
+    )
+    executable.chmod(0o700)
+    config = Config()
+    config.runtime.claude = str(executable)
+    with pytest.raises(LXError, match="structured result"):
+        await claude_turn(paths, config, store, "evaluate", Evaluation, read_only=True)

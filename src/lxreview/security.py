@@ -15,10 +15,15 @@ SECRET_VALUE = re.compile(
 PRIVATE_KEY = re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", re.S)
 
 
+def token_count(key: str, value) -> bool:
+    """Claude's usage counters ("input_tokens", "cacheReadInputTokens"), not credentials."""
+    return key.lower().endswith("tokens") and type(value) is int
+
+
 def redact(value):
     if isinstance(value, dict):
         return {
-            k: "[REDACTED]" if SECRET_KEYS.search(k) else redact(v)
+            k: "[REDACTED]" if SECRET_KEYS.search(k) and not token_count(k, v) else redact(v)
             for k, v in value.items()
             if k not in ("thinking", "signature")
         }
@@ -285,7 +290,7 @@ def allowed(
     if phase not in ("evaluate", "edit", "publish"):
         return False, "Unknown worker phase"
     if phase == "evaluate" and tool not in ("Read", "Glob", "Grep", "StructuredOutput"):
-        return False, "Evaluation is read-only"
+        return False, "Evaluation is read-only: use only the Read, Glob and Grep tools"
     if phase == "publish" and tool in ("Write", "Edit", "MultiEdit"):
         return False, "Publication cannot edit files"
     if not isinstance(data, dict):

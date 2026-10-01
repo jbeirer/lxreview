@@ -165,6 +165,14 @@ def test_redaction_drops_hidden_reasoning():
     assert "secret" not in text and "hidden" not in text and "sensitive-token" not in text
 
 
+def test_redaction_keeps_usage_counts_but_not_token_values():
+    usage = {"input_tokens": 3, "cache_read_input_tokens": 120, "cacheReadInputTokens": 120}
+    data = {"usage": usage, "access_tokens": "private", "token": 7, "tokens": True}
+    result = redact(data)
+    assert result["usage"] == usage
+    assert result["access_tokens"] == result["token"] == result["tokens"] == "[REDACTED]"
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -412,6 +420,20 @@ def test_shell_expansion_symlink_and_indirect_paths_denied(tmp_path, command):
 def test_structured_output_is_allowed_without_enabling_other_tools(tmp_path):
     assert allowed({"tool_name": "StructuredOutput", "tool_input": {"findings": []}}, tmp_path)[0]
     assert not allowed({"tool_name": "NotebookEdit", "tool_input": {}}, tmp_path)[0]
+
+
+def test_guard_restricts_each_phase_although_every_turn_lists_the_same_tools(tmp_path):
+    def event(tool, **data):
+        return {"tool_name": tool, "tool_input": data}
+
+    write = {"file_path": str(tmp_path / "a.py"), "content": "x"}
+    edit = {"file_path": str(tmp_path / "a.py"), "old_string": "x", "new_string": "y"}
+    for tool, data in (("Bash", {"command": "ls"}), ("Write", write), ("Edit", edit)):
+        assert not allowed(event(tool, **data), tmp_path, "evaluate")[0], tool
+    assert allowed(event("Grep", pattern="x", path=str(tmp_path)), tmp_path, "evaluate")[0]
+    for tool, data in (("Write", write), ("Edit", edit)):
+        assert not allowed(event(tool, **data), tmp_path, "publish")[0], tool
+        assert allowed(event(tool, **data), tmp_path, "edit")[0], tool
 
 
 def test_atomic_export_preserves_existing_directory_permissions(tmp_path):
