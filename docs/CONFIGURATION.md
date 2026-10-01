@@ -66,7 +66,7 @@ worker_timeout = 7200
 | `timeout` | Seconds for an independent review | 5–1800 |
 | `worker_timeout` | Seconds for one Claude turn, including checks | 30–28800 |
 
-`lxreview run <PR-URL> --max-passes 3` overrides the pass limit for a new run. `LXREVIEW_MAX_PASSES` overrides the configured limit; the CLI option takes precedence. See [Operations](OPERATIONS.md#review-decisions-and-verification) for final-pass behavior.
+`--max-passes 3`, in `/review-loop` or in `lxreview run`, overrides the pass limit for a new run. `LXREVIEW_MAX_PASSES` overrides the configured limit; the CLI option takes precedence. See [Operations](OPERATIONS.md#review-decisions-and-verification) for final-pass behavior.
 
 ## Commits and pushes
 

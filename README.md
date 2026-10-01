@@ -104,6 +104,8 @@ The branch must be pushed to its upstream and have an open PR or MR that ChatGPT
 3. Claude runs the project's relevant checks on the unchanged code, implements accepted fixes, then checks again.
 4. Claude commits the fixes; LXReview pushes them and asks ChatGPT to review the updated PR. Either step can [wait for your approval](#approving-commits-and-pushes).
 
+These steps repeat until a review leaves no accepted substantial finding, for at most 5 passes. Change the limit for one run with `/review-loop --max-passes 3` (1 to 20), or for every run with [`max_passes`](docs/CONFIGURATION.md#pass-limits-and-timeouts).
+
 New check failures block publication. Pre-existing failures and checks that cannot run are reported. See [review decisions and verification](docs/OPERATIONS.md#review-decisions-and-verification) for the detailed policy.
 
 ## Approving commits and pushes
