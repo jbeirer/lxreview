@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 [project]
 name = "lxreview"
-version = "0.2.0"
+version = "0.3.0"
 description = "Independent ChatGPT review loops for Claude Code, on any Linux host or remote machine"
 readme = "README.md"
 requires-python = ">=3.12"
