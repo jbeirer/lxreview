@@ -772,6 +772,7 @@ async def review_only_pass(
         continues=continues,
         limit_reached=limit_reached,
         title_limit_reached=title_limit_reached,
+        drafts=bool(accepted_comments(all_findings)),
     )
     if continues:
         store.update(completed_pass=number)
@@ -790,6 +791,14 @@ async def review_only_pass(
     return False
 
 
+def accepted_comments(findings: list[dict]) -> list[dict]:
+    return [
+        {**f["comment"], "finding": f["key"]}
+        for f in findings
+        if f["decision"] == "ACCEPTED" and f["comment"]
+    ]
+
+
 def post_review(
     paths: Paths,
     config: Config,
@@ -804,11 +813,7 @@ def post_review(
     state = store.load()
     target = forge.parse(state["target"])
     pass_dir = Path(state["audit"]) / f"pass-{number:02}"
-    drafted = [
-        {**f["comment"], "finding": f["key"]}
-        for f in findings
-        if f["decision"] == "ACCEPTED" and f["comment"]
-    ]
+    drafted = accepted_comments(findings)
     if not drafted:
         on_github(target, paths, config, head, "while findings were evaluated")
         store.update(completed_pass=number)
@@ -966,6 +971,7 @@ async def execute(
                             new_substantial=0,
                             duplicates=0,
                             continues=False,
+                            drafts=bool(accepted_comments(earlier)),
                         )
                         post_review(
                             paths, config, store, repo, number, identity["head"], earlier, "CLEAN"

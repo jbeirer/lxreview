@@ -224,6 +224,8 @@ def describe(
             else "earlier-finding limit reached"
             if event.get("title_limit_reached")
             else "drafting the review"
+            if event.get("drafts")
+            else "no review to draft"
         )
         texts = [
             f"Reviewer pass {n} added {added}"

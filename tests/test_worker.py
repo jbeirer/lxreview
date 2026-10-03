@@ -936,6 +936,10 @@ async def test_review_only_posts_nothing_when_no_finding_is_accepted(paths, tmp_
     await execute(paths, Config(), store, reviewer, reviewing({"S1": "REJECTED"}, []))
     assert store.load()["status"] == "NO_VALID_SUBSTANTIAL_FINDINGS" and not github["posted"]
     assert not (Path(store.load()["audit"]) / "pass-01/review-draft.json").exists()
+    events = [
+        json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
+    ]
+    assert next(e for e in events if e["kind"] == "review_pass_summary")["drafts"] is False
 
 
 @pytest.mark.parametrize(
@@ -1091,6 +1095,8 @@ async def test_review_only_saturates_and_posts_once(paths, tmp_path, github):
         json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
     ]
     assert next(e for e in events if e["kind"] == "review_posted")["passes"] == 2
+    summaries = [e for e in events if e["kind"] == "review_pass_summary"]
+    assert [e["drafts"] for e in summaries] == [True, True]
 
 
 async def test_review_only_duplicates_and_new_findings(paths, tmp_path, github):

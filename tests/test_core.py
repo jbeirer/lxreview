@@ -712,10 +712,15 @@ def test_multi_pass_timeline():
             "pass_number": 2,
             "new_substantial": 0,
             "duplicates": 2,
+            "drafts": True,
             "time": "",
         }
     )[0]
     assert "added no new substantial finding (2 duplicates); drafting the review" in line
+    line = describe(
+        {"kind": "review_pass_summary", "pass_number": 1, "new_substantial": 0, "time": ""}
+    )[0]
+    assert line.endswith("added no new substantial finding; no review to draft")
     line = describe(
         {
             "kind": "review_pass_summary",
