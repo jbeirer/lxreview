@@ -39,7 +39,7 @@ Only public repositories can be reviewed, on GitHub as on GitLab: ChatGPT and LX
 
 GitLab merge requests are supported on gitlab.com and self-managed GitLab instances, such as gitlab.cern.ch, whose public projects can be read without signing in. The MR URL must use the instance's own host name without a port. The upstream remote must be on the same GitLab host, over HTTPS on any port (including the Kerberos form `https://:@gitlab.cern.ch:8443/...`) or SSH (`git@host:group/project.git` or `ssh://git@host:7999/...`); pushes use your normal Git credentials.
 
-Every pass opens a fresh Temporary Chat in the same managed browser tab. Previous review findings are never sent to ChatGPT; ChatGPT memory and history do not supply context, and these review chats do not appear in chat history.
+Every pass opens a fresh Temporary Chat in the same managed browser tab. In fix-loop runs, previous review findings are never sent to ChatGPT; later review-only passes receive only earlier finding titles. ChatGPT memory and history do not supply context, and these review chats do not appear in chat history.
 
 Claude evaluates every substantial finding against the code and the PR or MR description, comments, reviews or approvals, and review threads, including resolution state. It rejects a previously settled point when the recorded reason still holds, citing the comment; the reviewer is also asked not to reopen settled points.
 
