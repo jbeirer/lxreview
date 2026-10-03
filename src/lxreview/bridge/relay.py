@@ -216,9 +216,11 @@ class RelayReviewer:
         self.session = RelaySession(paths)
 
     async def review(self, request: ReviewRequest) -> ReviewResponse:
-        return ReviewResponse.model_validate(
-            await self.session.call("review", **request.model_dump())
-        )
+        # Keep the timeout even at its default; it sizes the relay's HTTP deadline.
+        data = request.model_dump()
+        if not data["known_findings"]:
+            del data["known_findings"]
+        return ReviewResponse.model_validate(await self.session.call("review", **data))
 
     async def health(self) -> Health:
         return await self.session.health()

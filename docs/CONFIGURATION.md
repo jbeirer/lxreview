@@ -95,7 +95,7 @@ Override either setting for one run with `--commit ask` or `--push ask`, in `/re
 lxreview run https://github.com/owner/repository/pull/123 --repo /path/to/repository --review-only
 ```
 
-It is a per-run choice with no configuration setting. The run is always a single pass, so it cannot be combined with `--max-passes`, and it never commits or pushes, so `--commit` and `--push` are refused too. `--chatgpt`, `--claude` and `--substantial-only` work as usual. See [review-only runs](OPERATIONS.md#review-only-runs).
+It is a per-run choice with no configuration setting. The run reviews the same head until a pass adds no new accepted substantial finding, bounded by `review.max_passes` (default 5) or `--max-passes`. It never commits or pushes, so `--commit` and `--push` are refused. `--chatgpt`, `--claude` and `--substantial-only` work as usual. See [review-only runs](OPERATIONS.md#review-only-runs).
 
 ## Verification environment
 

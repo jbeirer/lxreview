@@ -671,3 +671,64 @@ def test_scratch_and_session_output_exceptions_do_not_follow_escaping_symlinks(
         "transcript_path": str(project / f"{session}.jsonl"),
     }
     assert not allowed(event, repo)[0]
+
+
+def test_known_findings_prompt():
+    request = ReviewRequest(target="https://github.com/org/repo/pull/1", head_sha="a" * 40)
+    assert "Earlier independent" not in prompt_for(request)
+    request.known_findings = ["off by one", "overflow"]
+    prompt = prompt_for(request)
+    assert "1. off by one; 2. overflow" in prompt
+    assert "If no substantial issue exists beyond them, end with VERDICT: CLEAN." in prompt
+    assert "\n" not in prompt and "\r" not in prompt
+
+
+@pytest.mark.parametrize("titles", [[""], ["a\nb"], ["a\rb"], ["a|b"], ["x" * 161], ["x"] * 61])
+def test_known_findings_validation(titles):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ReviewRequest(
+            target="https://github.com/org/repo/pull/1", head_sha="a" * 40, known_findings=titles
+        )
+
+
+def test_multi_pass_timeline():
+    from lxreview.timeline import describe, style
+
+    line = describe(
+        {
+            "kind": "finding_evaluated",
+            "decision": "DUPLICATE",
+            "finding": "S1",
+            "duplicate_of": "P1-S1",
+            "time": "",
+        }
+    )[0]
+    assert "(duplicate of P1-S1)" in line and style("DUPLICATE S1") == "dim"
+    line = describe(
+        {
+            "kind": "review_pass_summary",
+            "pass_number": 2,
+            "new_substantial": 0,
+            "duplicates": 2,
+            "drafts": True,
+            "time": "",
+        }
+    )[0]
+    assert "added no new substantial finding (2 duplicates); drafting the review" in line
+    line = describe(
+        {"kind": "review_pass_summary", "pass_number": 1, "new_substantial": 0, "time": ""}
+    )[0]
+    assert line.endswith("added no new substantial finding; no review to draft")
+    line = describe(
+        {
+            "kind": "review_pass_summary",
+            "pass_number": 1,
+            "new_substantial": 61,
+            "title_limit_reached": True,
+            "time": "",
+        }
+    )[0]
+    assert line.endswith("61 new substantial findings; earlier-finding limit reached")
+    assert "after 2 passes" in describe({"kind": "review_posted", "passes": 2, "time": ""})[0]

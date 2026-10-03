@@ -114,7 +114,7 @@ Options combine freely, except as noted for `--review-only`:
 | [`--commit ask`](#approving-commits-and-pushes) | Wait for your approval before each commit | Commits automatically |
 | [`--push ask`](#approving-commits-and-pushes) | Wait for your approval before each push | Pushes automatically |
 | [`--substantial-only`](docs/CONFIGURATION.md#substantial-findings-only) | Fix only what ChatGPT classifies as substantial; non-blocking findings are left alone | Useful non-blocking findings are fixed too |
-| [`--review-only`](#review-only) | One review whose accepted findings become a pending GitHub review; nothing is committed or pushed. GitHub only; not with `--max-passes`, `--commit` or `--push` | Findings are fixed, committed and pushed |
+| [`--review-only`](#review-only) | Repeated reviews of the same head whose accepted findings become one pending GitHub review; nothing is committed or pushed. GitHub only; not with `--commit` or `--push` | Findings are fixed, committed and pushed |
 
 In a terminal, `lxreview run <URL> --repo <path>` takes the same options; the URL is required there. The defaults for models, passes, commits and pushes can be changed for every run in [Configuration](docs/CONFIGURATION.md).
 
@@ -159,7 +159,7 @@ gh pr checkout 123
 /review-loop https://github.com/owner/repository/pull/123 --review-only
 ```
 
-ChatGPT reviews the PR once and Claude checks each finding against the code and the PR discussion. The findings Claude accepts become a **pending review** on the PR, created with your `gh` login: inline comments on the affected lines, with a suggested change where the fix is local, and a summary for anything outside the diff. Only you can see a pending review. Open the PR on GitHub to edit or delete comments, then submit or discard the review. LXReview never submits a review, approves or requests changes, and in this mode it neither commits nor pushes.
+ChatGPT reviews the same PR head until a pass adds no new accepted substantial finding, up to `--max-passes` (default 5). Later passes receive earlier finding titles to avoid repeats; Claude checks each finding against the code and the PR discussion and deduplicates it. The findings Claude accepts become a **pending review** on the PR, created with your `gh` login: inline comments on the affected lines, with a suggested change where the fix is local, and a summary for anything outside the diff. Only you can see a pending review. Open the PR on GitHub to edit or delete comments, then submit or discard the review. LXReview never submits a review, approves or requests changes, and in this mode it neither commits nor pushes.
 
 Review-only runs support GitHub PRs, not GitLab merge requests. See [review-only runs](docs/OPERATIONS.md#review-only-runs) for details.
 

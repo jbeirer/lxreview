@@ -133,6 +133,7 @@ async def test_full_two_pass_loop_with_prior_raw_saved(paths, tmp_path, monkeypa
     assert store.load()["status"] == "CLEAN"
     assert calls == [True, False, False]
     assert [r.head_sha for r in reviewer.requests] == ["a" * 40, "b" * 40]
+    assert all(not r.known_findings for r in reviewer.requests)
     assert (Path(store.load()["audit"]) / "pass-01/diff.patch").exists()
     assert "CLEAN" in store.report()
     events = (store.directory / "events.jsonl").read_text().splitlines()
@@ -486,6 +487,7 @@ async def test_non_blocking_findings_are_weighed_with_substantial_ones(
     # Polish was already done this run: the clean second review ends it untouched.
     assert len(prompts) == 3 and store.load()["status"] == "CLEAN"
     assert [r.head_sha for r in reviewer.requests] == ["a" * 40, "b" * 40]
+    assert all(not r.known_findings for r in reviewer.requests)
 
 
 async def test_a_clean_review_with_polish_gets_one_polish_pass(paths, tmp_path, monkeypatch):
@@ -799,9 +801,15 @@ def github(monkeypatch):
     return fake
 
 
-def review_only(paths, tmp_path):
+def review_only(paths, tmp_path, max_passes=1):
     return RunStore.create(
-        paths, tmp_path, PR, {"head": "a" * 40}, 1, Drafting(tmp_path, paths).audit_root(), True
+        paths,
+        tmp_path,
+        PR,
+        {"head": "a" * 40},
+        max_passes,
+        Drafting(tmp_path, paths).audit_root(),
+        True,
     )
 
 
@@ -928,6 +936,10 @@ async def test_review_only_posts_nothing_when_no_finding_is_accepted(paths, tmp_
     await execute(paths, Config(), store, reviewer, reviewing({"S1": "REJECTED"}, []))
     assert store.load()["status"] == "NO_VALID_SUBSTANTIAL_FINDINGS" and not github["posted"]
     assert not (Path(store.load()["audit"]) / "pass-01/review-draft.json").exists()
+    events = [
+        json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
+    ]
+    assert next(e for e in events if e["kind"] == "review_pass_summary")["drafts"] is False
 
 
 @pytest.mark.parametrize(
@@ -1062,3 +1074,347 @@ async def test_an_existing_pending_review_is_never_replaced(paths, tmp_path, git
     state = store.load()
     assert state["status"] == "FAILED" and f"pending review on this PR: {DRAFT}" in state["error"]
     assert not github["posted"]
+
+
+async def test_review_only_saturates_and_posts_once(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    reviewer = Reviewer(
+        ["SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES", "VERDICT: CLEAN"]
+    )
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Fix it.")
+    await execute(paths, Config(), store, reviewer, reviewing({"S1": "ACCEPTED"}, [comment]))
+    state = store.load()
+    assert state["status"] == "REVIEW_DRAFTED" and state["completed_pass"] == 2
+    assert [r.known_findings for r in reviewer.requests] == [[], ["off by one"]]
+    assert len(github["posted"]) == 1
+    audit = Path(state["audit"])
+    assert (audit / "pass-02/review-posted.json").exists()
+    assert not (audit / "pass-01/review-draft.json").exists()
+    assert json.loads((audit / "pass-02/comments.json").read_text())["findings"] == []
+    events = [
+        json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
+    ]
+    assert next(e for e in events if e["kind"] == "review_posted")["passes"] == 2
+    summaries = [e for e in events if e["kind"] == "review_pass_summary"]
+    assert [e["drafts"] for e in summaries] == [True, True]
+
+
+async def test_review_only_duplicates_and_new_findings(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    reviewer = Reviewer(
+        [
+            "SUBSTANTIAL [S1] off by one\nVERDICT: SUBSTANTIAL_ISSUES",
+            "SUBSTANTIAL [S1] same cause\nSUBSTANTIAL [S2] overflow\nVERDICT: SUBSTANTIAL_ISSUES",
+            "VERDICT: CLEAN",
+        ]
+    )
+
+    async def turn(paths, config, store, prompt, schema, read_only):
+        number = store.load()["pass"]
+        if number == 1:
+            return await reviewing(
+                {"S1": "ACCEPTED"},
+                [Comment(finding="S1", path="src/parse.py", line=12, body="First")],
+            )(paths, config, store, prompt, schema, read_only)
+        assert "P1-S1 (SUBSTANTIAL, ACCEPTED)" in prompt
+        assert "decision DUPLICATE" in prompt
+        return Review(
+            findings=[
+                Decision(
+                    finding="S1",
+                    decision="DUPLICATE",
+                    duplicate_of="P1-S1",
+                    reason="same",
+                    evidence="code",
+                ),
+                Decision(finding="S2", decision="ACCEPTED", reason="new", evidence="code"),
+            ],
+            comments=[Comment(finding="S2", path="src/parse.py", line=13, body="Second")],
+        )
+
+    await execute(paths, Config(), store, reviewer, turn)
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert [c["body"] for c in github["posted"][0]["comments"]] == ["First", "Second"]
+    assert reviewer.requests[2].known_findings == ["off by one", "same cause", "overflow"]
+
+
+@pytest.mark.parametrize("last", ["reject", "polish", "limit"])
+async def test_review_only_stopping_conditions(paths, tmp_path, github, last):
+    store = review_only(paths, tmp_path, 2)
+    raw = (
+        "NON_BLOCKING [N1] name\nVERDICT: CLEAN"
+        if last == "polish"
+        else "SUBSTANTIAL [S1] new\nVERDICT: SUBSTANTIAL_ISSUES"
+    )
+    reviewer = Reviewer(["SUBSTANTIAL [S1] first\nVERDICT: SUBSTANTIAL_ISSUES", raw])
+
+    async def turn(paths, config, store, prompt, schema, read_only):
+        first = store.load()["pass"] == 1
+        key = "N1" if not first and last == "polish" else "S1"
+        accepted = first or last != "reject"
+        return await reviewing(
+            {key: "ACCEPTED" if accepted else "REJECTED"},
+            [Comment(finding=key, path="src/parse.py", line=12, body="Fix")] if accepted else [],
+        )(paths, config, store, prompt, schema, read_only)
+
+    await execute(paths, Config(), store, reviewer, turn)
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert ("Pass limit reached" in store.load()["error"]) == (last == "limit")
+    assert len(github["posted"][0]["comments"]) == (1 if last == "reject" else 2)
+
+
+@pytest.mark.parametrize(
+    "decision,duplicate_of", [("DUPLICATE", None), ("DUPLICATE", "P9-S1"), ("ACCEPTED", "P1-S1")]
+)
+async def test_invalid_duplicate_protocol(paths, tmp_path, github, decision, duplicate_of):
+    store = review_only(paths, tmp_path)
+
+    async def turn(*args, **kwargs):
+        return Review(
+            findings=[
+                Decision(
+                    finding="S1",
+                    decision=decision,
+                    duplicate_of=duplicate_of,
+                    reason="x",
+                    evidence="x",
+                )
+            ],
+            comments=[],
+        )
+
+    await execute(
+        paths, Config(), store, Reviewer(["SUBSTANTIAL [S1] x\nVERDICT: SUBSTANTIAL_ISSUES"]), turn
+    )
+    assert store.load()["status"] == "FAILED" and "duplicate" in store.load()["error"]
+    assert not github["posted"]
+
+
+async def test_fix_loop_refuses_duplicates_and_never_sends_titles(paths, tmp_path, monkeypatch):
+    monkeypatch.setattr("lxreview.worker.Repository", Repo)
+    store = create(paths, tmp_path)
+    reviewer = Reviewer(["SUBSTANTIAL [S1] x\nVERDICT: SUBSTANTIAL_ISSUES"])
+
+    async def turn(*args, **kwargs):
+        return Evaluation(
+            findings=[
+                Decision(
+                    finding="S1",
+                    decision="DUPLICATE",
+                    duplicate_of="P1-S1",
+                    reason="x",
+                    evidence="x",
+                )
+            ]
+        )
+
+    await execute(paths, Config(), store, reviewer, turn)
+    assert store.load()["status"] == "FAILED" and "duplicate" in store.load()["error"]
+    assert all(r.known_findings == [] for r in reviewer.requests)
+
+
+@pytest.mark.parametrize("failure", ["post", "head", "checkpoint", "missing"])
+async def test_later_pass_failure_keeps_previous_checkpoint(
+    paths, tmp_path, github, monkeypatch, failure
+):
+    store = review_only(paths, tmp_path, 3)
+
+    class Later(Reviewer):
+        async def review(self, request):
+            if self.requests:
+                if failure == "head":
+                    github["head"] = "b" * 40
+            return await super().review(request)
+
+    reviewer = Later(["SUBSTANTIAL [S1] first\nVERDICT: SUBSTANTIAL_ISSUES", "VERDICT: CLEAN"])
+    original = store.update
+
+    def update(**changes):
+        result = original(**changes)
+        if changes.get("completed_pass") == 1:
+            if failure == "checkpoint":
+                monkeypatch.setattr(Repo, "head_value", "b" * 40)
+                monkeypatch.setattr(Drafting, "pr_head", "b" * 40)
+            if failure == "missing":
+                (Path(result["audit"]) / "pass-01/comments.json").unlink()
+        return result
+
+    monkeypatch.setattr(store, "update", update)
+    if failure == "post":
+
+        def fail(*args):
+            raise LXError(Category.UNAVAILABLE, "Posting failed")
+
+        monkeypatch.setattr("lxreview.comments.post", fail)
+    await execute(
+        paths,
+        Config(),
+        store,
+        reviewer,
+        reviewing(
+            {"S1": "ACCEPTED"}, [Comment(finding="S1", path="src/parse.py", line=12, body="Fix")]
+        ),
+    )
+    assert store.load()["status"] == "FAILED" and store.load()["completed_pass"] == 1
+    assert not github["posted"]
+    if failure == "checkpoint":
+        assert "The PR head changed between passes" in store.load()["error"]
+
+
+def test_completed_findings_ignore_interrupted_and_sanitize_titles(tmp_path):
+    from lxreview.worker import completed_findings, known_titles
+
+    directory = tmp_path / "pass-01"
+    directory.mkdir()
+    (directory / "reviewer.md").write_text(
+        "SUBSTANTIAL [S1]\nbody fallback\nSUBSTANTIAL [S2]\nVERDICT: SUBSTANTIAL_ISSUES"
+    )
+    findings = [
+        {"key": f"P1-S{i}", "id": f"S{i}", "title": title}
+        for i, title in enumerate(["", "", " a\n b|\x00c ", "x" * 200, "a bc"], 1)
+    ]
+    (directory / "comments.json").write_text(
+        json.dumps({"head": "a", "pass": 1, "findings": findings})
+    )
+    interrupted = tmp_path / "pass-02-interrupted-abc"
+    interrupted.mkdir()
+    (interrupted / "comments.json").write_text("invalid")
+    titles = known_titles(completed_findings(tmp_path, 2, "a"))
+    assert titles == ["body fallback", "finding S2 of pass 1 (untitled)", "a bc", "x" * 160]
+    with pytest.raises(LXError):
+        completed_findings(tmp_path, 2, "b")
+
+
+def test_earlier_context_names_an_untitled_finding_by_its_body(tmp_path):
+    from lxreview.worker import completed_findings, earlier_context
+
+    directory = tmp_path / "pass-01"
+    directory.mkdir()
+    (directory / "reviewer.md").write_text(
+        "SUBSTANTIAL [S1]\nThe loop skips the last bin.\nVERDICT: SUBSTANTIAL_ISSUES"
+    )
+    finding = {
+        "id": "S1",
+        "key": "P1-S1",
+        "title": "",
+        "classification": "SUBSTANTIAL",
+        "decision": "ACCEPTED",
+        "duplicate_of": None,
+        "comment": None,
+    }
+    (directory / "comments.json").write_text(
+        json.dumps({"head": "a", "pass": 1, "findings": [finding]})
+    )
+    context = earlier_context(completed_findings(tmp_path, 2, "a"))
+    assert "P1-S1 (SUBSTANTIAL, ACCEPTED): The loop skips the last bin." in context
+
+
+async def test_title_cap_finalizes_without_losing_comments(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    raw = (
+        "\n".join(f"SUBSTANTIAL [S{i}] problem {i}" for i in range(1, 62))
+        + "\nVERDICT: SUBSTANTIAL_ISSUES"
+    )
+    await execute(
+        paths,
+        Config(),
+        store,
+        Reviewer([raw]),
+        reviewing(
+            {f"S{i}": "ACCEPTED" for i in range(1, 62)},
+            [
+                Comment(finding=f"S{i}", path="src/parse.py", line=12, body=f"Fix {i}")
+                for i in range(1, 62)
+            ],
+        ),
+    )
+    assert store.load()["status"] == "REVIEW_DRAFTED" and store.load()["completed_pass"] == 1
+    assert len(github["posted"][0]["comments"]) == 61
+    assert "More than 60 earlier findings" in store.load()["error"]
+    events = [
+        json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
+    ]
+    summary = next(e for e in events if e["kind"] == "review_pass_summary")
+    assert summary["title_limit_reached"] and not summary["limit_reached"]
+
+
+async def test_ignored_non_blocking_findings_are_not_carried_forward(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    store.update(substantial_only=True)
+    reviewer = Reviewer(
+        [
+            "SUBSTANTIAL [S1] off by one\nNON_BLOCKING [N1] unclear name\n"
+            "VERDICT: SUBSTANTIAL_ISSUES",
+            # The ignored point returns as substantial; it is new, not a duplicate.
+            "SUBSTANTIAL [S1] unclear name\nVERDICT: SUBSTANTIAL_ISSUES",
+            "VERDICT: CLEAN",
+        ]
+    )
+    prompts: list[str] = []
+    turn = reviewing(
+        {"S1": "ACCEPTED"},
+        [Comment(finding="S1", path="src/parse.py", line=12, body="Fix")],
+        prompts,
+    )
+    await execute(paths, Config(), store, reviewer, turn)
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert [r.known_findings for r in reviewer.requests] == [
+        [],
+        ["off by one"],
+        ["off by one", "unclear name"],
+    ]
+    assert "P1-N1" not in prompts[1]
+    assert len(github["posted"][0]["comments"]) == 2
+
+
+async def test_resume_uses_completed_findings_and_ignores_interrupted(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    audit = Path(store.load()["audit"])
+    first = audit / "pass-01"
+    first.mkdir(parents=True)
+    (first / "reviewer.md").write_text("SUBSTANTIAL [S1] original\nVERDICT: SUBSTANTIAL_ISSUES")
+    comment = Comment(finding="S1", path="src/parse.py", line=12, body="Retained")
+    (first / "comments.json").write_text(
+        json.dumps(
+            {
+                "head": "a" * 40,
+                "pass": 1,
+                "findings": [
+                    {
+                        "id": "S1",
+                        "key": "P1-S1",
+                        "title": "original",
+                        "classification": "SUBSTANTIAL",
+                        "decision": "ACCEPTED",
+                        "duplicate_of": None,
+                        "comment": comment.model_dump(),
+                    }
+                ],
+            }
+        )
+    )
+    interrupted = audit / "pass-02-interrupted-abc"
+    interrupted.mkdir()
+    (interrupted / "comments.json").write_text("invalid")
+    store.update(completed_pass=1)
+    reviewer = Reviewer(["VERDICT: CLEAN"])
+    await execute(paths, Config(), store, reviewer)
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert reviewer.requests[0].known_findings == ["original"]
+    assert github["posted"][0]["comments"][0]["body"] == "Retained"
+
+
+async def test_non_blocking_acceptance_does_not_start_another_pass(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    reviewer = Reviewer(["NON_BLOCKING [N1] name\nVERDICT: CLEAN"])
+    await execute(
+        paths,
+        Config(),
+        store,
+        reviewer,
+        reviewing(
+            {"N1": "ACCEPTED"}, [Comment(finding="N1", path="src/parse.py", line=12, body="Rename")]
+        ),
+    )
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert len(reviewer.requests) == 1

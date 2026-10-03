@@ -1,8 +1,8 @@
 import re
 from enum import StrEnum
-from typing import Protocol
+from typing import Annotated, Protocol
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from . import forge
 from .errors import Category
@@ -21,7 +21,17 @@ MODEL_NAME = r"^[\w .+()-]{1,60}$"
 EFFORT_NAME = r"^[a-z][a-z -]{0,30}$"
 
 
+KNOWN_LIMIT = 60
+KNOWN_TITLE_LIMIT = 160
+
+
 class ReviewRequest(BaseModel):
+    known_findings: list[
+        Annotated[
+            str,
+            StringConstraints(min_length=1, max_length=KNOWN_TITLE_LIMIT, pattern=r"^[^\r\n|]+$"),
+        ]
+    ] = Field(default_factory=list, max_length=KNOWN_LIMIT)
     target: str
     head_sha: str
     rubric: str = "correctness, regressions, edge cases, unnecessary complexity, API consistency, test quality, maintainability"

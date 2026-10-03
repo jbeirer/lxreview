@@ -188,6 +188,7 @@ async def test_entire_remote_review_excludes_local_control(paths):
             return {}
 
         async def query(self, prompt, timeout):
+            assert "1. off by one" in prompt
             events.append("query")
             return "VERDICT: CLEAN"
 
@@ -210,6 +211,7 @@ async def test_entire_remote_review_excludes_local_control(paths):
                         "target": "https://github.com/o/r/pull/1",
                         "head_sha": "a" * 40,
                         "timeout": 5,
+                        "known_findings": ["off by one"],
                     },
                 )
             )
@@ -220,6 +222,17 @@ async def test_entire_remote_review_excludes_local_control(paths):
             proceed.set()
             response = await request
             assert response.json()["result"]["verdict"] == "CLEAN"
+            assert events == ["new", "ready", "query"]
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1/review",
+                headers={"Authorization": "Bearer secret"},
+                json={
+                    "target": "https://github.com/o/r/pull/1",
+                    "head_sha": "a" * 40,
+                    "known_findings": ["invalid|title"],
+                },
+            )
+            assert response.status_code == 400
             assert events == ["new", "ready", "query"]
     finally:
         proceed.set()
@@ -374,3 +387,54 @@ async def test_configure_operation_validates_its_choices(paths):
             assert session.chosen == [("GPT-5.5", "high")]
     finally:
         await runner.cleanup()
+
+
+async def test_relay_omits_default_known_findings(paths):
+    from lxreview.bridge.relay import RelayReviewer
+    from lxreview.contracts import ReviewRequest
+
+    calls = []
+
+    class Relay:
+        async def call(self, operation, **kwargs):
+            calls.append(kwargs)
+            return {"raw": "VERDICT: CLEAN", "verdict": "CLEAN"}
+
+    reviewer = RelayReviewer(paths)
+    reviewer.session = Relay()
+    request = ReviewRequest(target="https://github.com/o/r/pull/1", head_sha="a" * 40)
+    await reviewer.review(request)
+    assert "known_findings" not in calls[0]
+    request.known_findings = ["previous"]
+    await reviewer.review(request)
+    assert calls[1]["known_findings"] == ["previous"]
+
+
+async def test_relay_review_keeps_the_default_deadline(paths, monkeypatch):
+    import socket
+
+    from lxreview.bridge import relay
+    from lxreview.contracts import ReviewRequest
+    from lxreview.paths import write_json
+
+    write_json(
+        paths.root / "state/bridge/connection.json",
+        {"host": socket.getfqdn(), "port": 40000, "expires": time.time() + 60, "token": "x" * 40},
+    )
+    timeouts = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            timeouts.append(kwargs["timeout"])
+
+        async def __aenter__(self):
+            raise httpx.ConnectError("stop")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(relay.httpx, "AsyncClient", Client)
+    request = ReviewRequest(target="https://github.com/o/r/pull/1", head_sha="a" * 40)
+    with pytest.raises(LXError):
+        await relay.RelayReviewer(paths).review(request)
+    assert timeouts[0].read == 1800 + 15
