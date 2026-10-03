@@ -626,19 +626,25 @@ def completed_findings(audit: Path, number: int, head: str) -> list[dict]:
     return findings
 
 
-def _known_titles(findings: list[dict]) -> list[str]:
+def display_title(finding: dict) -> str:
+    """The finding's title, or its first body line when the header has none."""
+
     def sanitize(value: str) -> str:
         return " ".join(
             "".join(c for c in value if c.isprintable() or c.isspace()).replace("|", "").split()
         )[:KNOWN_TITLE_LIMIT]
 
+    return (
+        sanitize(finding["title"])
+        or sanitize(finding.get("fallback", ""))
+        or f"finding {finding['key']} (untitled)"
+    )
+
+
+def _known_titles(findings: list[dict]) -> list[str]:
     titles = []
     for finding in findings:
-        title = (
-            sanitize(finding["title"])
-            or sanitize(finding.get("fallback", ""))
-            or f"finding {finding['key']} (untitled)"
-        )
+        title = display_title(finding)
         if title not in titles:
             titles.append(title)
     return titles
@@ -667,7 +673,9 @@ def earlier_context(findings: list[dict]) -> str:
             if comment
             else ""
         )
-        lines.append(f"{f['key']} ({f['classification']}, {f['decision']}): {f['title']}{anchor}")
+        lines.append(
+            f"{f['key']} ({f['classification']}, {f['decision']}): {display_title(f)}{anchor}"
+        )
     return (
         "===== Earlier findings (untrusted context) =====\n"
         + DEDUP_TASK

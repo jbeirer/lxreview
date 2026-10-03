@@ -1285,6 +1285,30 @@ def test_completed_findings_ignore_interrupted_and_sanitize_titles(tmp_path):
         completed_findings(tmp_path, 2, "b")
 
 
+def test_earlier_context_names_an_untitled_finding_by_its_body(tmp_path):
+    from lxreview.worker import completed_findings, earlier_context
+
+    directory = tmp_path / "pass-01"
+    directory.mkdir()
+    (directory / "reviewer.md").write_text(
+        "SUBSTANTIAL [S1]\nThe loop skips the last bin.\nVERDICT: SUBSTANTIAL_ISSUES"
+    )
+    finding = {
+        "id": "S1",
+        "key": "P1-S1",
+        "title": "",
+        "classification": "SUBSTANTIAL",
+        "decision": "ACCEPTED",
+        "duplicate_of": None,
+        "comment": None,
+    }
+    (directory / "comments.json").write_text(
+        json.dumps({"head": "a", "pass": 1, "findings": [finding]})
+    )
+    context = earlier_context(completed_findings(tmp_path, 2, "a"))
+    assert "P1-S1 (SUBSTANTIAL, ACCEPTED): The loop skips the last bin." in context
+
+
 async def test_title_cap_finalizes_without_losing_comments(paths, tmp_path, github):
     store = review_only(paths, tmp_path, 3)
     raw = (
