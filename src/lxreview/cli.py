@@ -396,7 +396,6 @@ def start_run(
         maximum = config.review.max_passes if max_passes is None else max_passes
         if review_only:
             _review_only_options(target, max_passes, commit, push)
-            maximum = 1
         if not 1 <= maximum <= 20:
             raise LXError(Category.CONFIG, "max-passes must be 1..20")
         if config.role != "host":
@@ -434,7 +433,7 @@ def start_run(
             except Exception:
                 store.finish("FAILED", "Persistent worker could not start; run doctor")
                 raise
-        described = _described(chosen, review_only)
+        described = _described(chosen, review_only, maximum)
         watch = f"{_launcher(paths)} watch {store.id}"
         output(
             {
@@ -451,7 +450,7 @@ def start_run(
 
 
 def _review_only_options(target: str, max_passes: int | None, commit: str, push: str) -> None:
-    """A review-only run is one pass that posts a GitHub review and publishes nothing."""
+    """A review-only run posts one GitHub review and publishes no repository changes."""
     from .forge import parse
 
     if parse(target).kind != "github":
@@ -459,8 +458,6 @@ def _review_only_options(target: str, max_passes: int | None, commit: str, push:
             Category.CONFIG,
             "Review-only runs post GitHub review comments; GitLab merge requests are not supported",
         )
-    if max_passes is not None:
-        raise LXError(Category.CONFIG, "A review-only run is a single pass; leave out --max-passes")
     if commit or push:
         raise LXError(
             Category.CONFIG,
@@ -508,6 +505,7 @@ def _announcement(
     if review_only:
         kind, steps = "review-only run", "the review, each finding's decision and reason"
         outcome = (
+            f"- Passes: {described.get('passes', '')}\n"
             "- Accepted findings will be added to a pending review on the PR, visible only to"
             " you until you submit it. Nothing in the repository changes.\n\n"
         )
@@ -531,7 +529,9 @@ def _announcement(
     )
 
 
-def _described(config: Config, review_only: bool = False) -> dict[str, str]:
+def _described(
+    config: Config, review_only: bool = False, max_passes: int | None = None
+) -> dict[str, str]:
     """The run's reviewer and worker choices in words, for people rather than parsers."""
     reviewer, worker = config.reviewer, config.worker
     chatgpt = "current model" if reviewer.model == "default" else reviewer.model
@@ -554,6 +554,13 @@ def _described(config: Config, review_only: bool = False) -> dict[str, str]:
         "reviewer": f"ChatGPT ({chatgpt}), {reviewer.reasoning_effort} reasoning",
         "worker": claude,
         "publishing": publishing,
+        **(
+            {
+                "passes": f"up to {max_passes if max_passes is not None else config.review.max_passes} review passes on the same PR head until the reviewer finds nothing new; accepted findings then become one pending review"
+            }
+            if review_only
+            else {}
+        ),
     }
 
 
@@ -588,16 +595,15 @@ def resume(run_id: str):
         require_afs_token(paths, paths.root, Path(state["repo"]))
         repo = Repository(Path(state["repo"]), paths)
         if state.get("review_only"):
-            if state["completed_pass"]:
-                raise LXError(Category.UNSAFE, "This review-only run already created its review")
             # A worker stopped after posting but before recording its pass leaves this behind.
-            posted = Path(state["audit"]) / "pass-01/review-posted.json"
-            if posted.exists():
+            for posted in Path(state["audit"]).glob("pass-*/review-posted.json"):
                 url = json.loads(posted.read_text()).get("html_url", "")
                 raise LXError(
                     Category.UNSAFE, f"This review-only run already created its review: {url}"
                 )
-            repo.review_checkpoint(state["target"])
+            identity = repo.review_checkpoint(state["target"])
+            if state["completed_pass"] and identity["head"] != state["starting_sha"]:
+                raise LXError(Category.UNSAFE, "The PR head changed between passes")
         else:
             repo.verify_identity(state["identity"])
             repo.preflight(state["target"])
@@ -785,11 +791,13 @@ def logs(run_id: str):
 @app.command()
 def show(
     run_id: str,
-    pass_number: int = typer.Option(1, "--pass"),
+    pass_number: int | None = typer.Option(None, "--pass"),
     json_output: bool = typer.Option(False, "--json"),
 ):
     paths, _ = context()
     store = RunStore(paths, run_id)
+    if pass_number is None:
+        pass_number = store.load().get("pass") or 1
     if pass_number < 1:
         raise LXError(Category.CONFIG, "Pass must be positive")
     directory = Path(store.load()["audit"]) / f"pass-{pass_number:02}"
@@ -803,6 +811,7 @@ def show(
             "diff.patch",
             "tests.log",
             "metadata.json",
+            "comments.json",
             "review-draft.json",
             "review-posted.json",
         )

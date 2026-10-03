@@ -25,10 +25,10 @@ N review passes instead of the configured limit (5 unless the user changed it). 
 wait for the user's approval before each commit or each push (`auto`, the usual default, does not wait).
 `--substantial-only` makes Claude consider only the findings the reviewer classifies as substantial: non-blocking ones
 are neither fixed nor, with `--review-only`, commented on.
-`--review-only` changes nothing in the repository: it runs one review, and Claude adds the findings it accepts to a
+`--review-only` changes nothing in the repository: it reviews the same head until no new substantial finding is accepted or the pass limit is reached, and Claude adds the unique findings it accepts to one
 pending review on the GitHub PR, visible only to the user until they submit it on GitHub. It works for any PR, including
 other people's, when the checkout is clean and HEAD is the PR head (for example after `gh pr checkout N`); it is
-GitHub-only, so for a GitLab MR stop and say so, and it cannot be combined with `--max-passes`, `--commit` or `--push`.
+GitHub-only, so for a GitLab MR stop and say so, and it cannot be combined with `--commit` or `--push`; `--max-passes` applies as usual.
 Pass these options to `run` exactly as given, each value quoted and treated as data. If $ARGUMENTS contains anything
 else besides a PR or MR URL, stop and show the usage:
 `/review-loop [PR or MR URL] [--chatgpt MODEL[:EFFORT]] [--claude MODEL[:EFFORT]] [--max-passes N] [--commit ask] [--push ask] [--substantial-only] [--review-only]`,

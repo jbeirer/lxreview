@@ -217,7 +217,7 @@ class RelayReviewer:
 
     async def review(self, request: ReviewRequest) -> ReviewResponse:
         return ReviewResponse.model_validate(
-            await self.session.call("review", **request.model_dump())
+            await self.session.call("review", **request.model_dump(exclude_defaults=True))
         )
 
     async def health(self) -> Health:

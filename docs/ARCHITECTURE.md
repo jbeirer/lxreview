@@ -57,7 +57,7 @@ Claude uses three restricted turns in one Claude session:
 
 LXReview validates the resulting commit and pushes it outside those turns. Optionally, the run waits for the user's approval before the commit turn, before the push, or both; `lxreview approve` records it in the run state, and `stop` cancels the wait. The [operations policy](OPERATIONS.md#review-decisions-and-verification) covers findings, baseline checks and final-pass behavior.
 
-A review-only run has one pass and only the first turn: the read-only evaluation also writes a review comment for each accepted finding. LXReview checks each comment's file and lines at the reviewed head, places comments inline where they fall in the PR's diff, and creates one pending GitHub review outside the sandbox. Its checkpoint is a clean checkout whose HEAD is the PR head; no branch, upstream or push policy is involved. See [review-only runs](OPERATIONS.md#review-only-runs).
+A review-only run repeats reviews of the same head up to the pass limit, stopping when a pass adds no new accepted substantial finding. Later reviewer prompts contain only earlier reviewer titles; fix-loop prompts stay blind. Claude deduplicates against earlier decisions. Each pass has only the first turn: the read-only evaluation also writes a review comment for each accepted finding. LXReview checks each comment's file and lines at the reviewed head, places comments inline where they fall in the PR's diff, and creates one pending GitHub review outside the sandbox. Its checkpoint is a clean checkout whose HEAD is the PR head; no branch, upstream or push policy is involved. See [review-only runs](OPERATIONS.md#review-only-runs).
 
 ```mermaid
 stateDiagram-v2
@@ -75,7 +75,7 @@ stateDiagram-v2
     INTERRUPTED --> QUEUED: verified resume
 ```
 
-Resume verifies branch/remote identity and a clean, pushed HEAD; for a review-only run, a clean checkout at the PR head and no pending review. Incomplete pass evidence is archived before another independent pass. A durable cancellation marker wins over later worker state updates; observing a missing worker marks a nonterminal run interrupted.
+Resume verifies branch/remote identity and a clean, pushed HEAD; for a review-only run, a clean checkout at the unchanged starting PR head and no pending or previously posted review. Incomplete pass evidence is archived before another independent pass. A durable cancellation marker wins over later worker state updates; observing a missing worker marks a nonterminal run interrupted.
 
 ## Hosts, storage and integration
 
@@ -87,7 +87,7 @@ Host identity prevents users of shared homes, such as LXPLUS nodes, from treatin
 | `~/.lxreview/bin/lxreview` | Fixed launcher written by `setup`: the tool environment's interpreter with this installation root |
 | `~/.lxreview/state/runs/<id>/` | Run state, redacted events, worker output, Claude session ID and cancellation marker |
 | `<git-common-dir>/review-loop/<id>/` | Run metadata, events, summary and per-pass evidence |
-| `<git-common-dir>/review-loop/<id>/pass-NN/` | Verbatim review, explicit evaluations, PR discussion, diff, check reports and metadata; in a review-only run, the review as prepared (`review-draft.json`) and as created (`review-posted.json`) |
+| `<git-common-dir>/review-loop/<id>/pass-NN/` | Verbatim review, explicit evaluations, PR discussion, diff, check reports and metadata; in a review-only run, per-pass findings and decisions (`comments.json`), and in the final pass the review as prepared (`review-draft.json`) and as created (`review-posted.json`) |
 
 Using the Git common directory keeps audit evidence out of commits and supports worktrees. Interrupted pass directories are retained with an `-interrupted-*` suffix. Events exclude hidden reasoning and redact credential-shaped values; raw reviews remain verbatim. See [Security](../SECURITY.md) before sharing artifacts.
 

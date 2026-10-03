@@ -70,18 +70,20 @@ A failed push leaves the commit locally and stops the run. Correct the underlyin
 
 ### Review-only runs
 
-`lxreview run <PR-URL> --review-only` (or `/review-loop <PR-URL> --review-only`) reviews a GitHub PR without changing the repository. The run has one pass:
+`lxreview run <PR-URL> --review-only` (or `/review-loop <PR-URL> --review-only`) reviews a GitHub PR without changing the repository. The run reviews the same head for up to `--max-passes` passes (default 5):
 
 1. ChatGPT reviews the PR in a fresh Temporary Chat, as in a fix loop.
 2. Claude evaluates every finding, substantial or non-blocking, against the code and the PR discussion, in a read-only turn. A non-blocking finding is accepted only when it is a real, useful improvement within the PR's scope. With `--substantial-only`, non-blocking findings are not evaluated or posted.
 3. For each accepted finding, Claude writes one review comment anchored to the narrowest line range at the reviewed head, with a GitHub suggested change when the fix is local to those lines.
-4. LXReview creates one pending review on the PR with your `gh` login. Comments on lines in the PR's diff appear inline; the rest go into the review's summary with a link to the lines. If GitHub refuses an inline position, LXReview creates the review once more with every comment in the summary.
+4. If a pass accepts a new substantial finding and the pass limit permits, another independent review follows. The reviewer receives only earlier finding titles, without Claude’s decisions, to avoid repeats. Claude marks repeats `DUPLICATE`, leaving earlier decisions in force. A pass adding no new accepted substantial finding ends the loop; the loop also ends if the known-title list would exceed 60 entries.
+5. After the last pass, LXReview creates one pending review on the PR with your `gh` login. Comments on lines in the PR's diff appear inline; the rest go into the review's summary with a link to the lines. If GitHub refuses an inline position, LXReview creates the review once more with every comment in the summary.
 
 A pending review is visible only to you until you submit it on GitHub, where you can edit or delete comments first, or discard it. LXReview never submits a review and never approves or requests changes. Rejected findings are not posted; `lxreview show <run-id>` shows every decision and the prepared review.
 
 | Outcome | Status |
 | --- | --- |
 | Pending review created | `REVIEW_DRAFTED`; the timeline links it |
+| Pass limit reached with new issues still found | `REVIEW_DRAFTED`, with the note “Pass limit reached while the reviewer still found new issues” |
 | Clean review without findings | `CLEAN`; nothing is posted |
 | No accepted findings | `CLEAN` or `NO_VALID_SUBSTANTIAL_FINDINGS`, according to the review verdict; nothing is posted |
 
@@ -91,7 +93,9 @@ Requirements:
 - A clean checkout whose HEAD is the PR head, for example after `gh pr checkout <number>` or `git fetch origin pull/<number>/head && git checkout FETCH_HEAD`. The branch, its upstream and push settings do not matter, so other people's PRs work. LXReview asks GitHub for the PR head before and after creating the review, and before it finishes a run that posts nothing, so a run whose PR moved on fails instead of finishing clean. If the PR head moves before the review is created, the run fails without posting; if it moves while the review is created, LXReview discards that review and the run fails.
 - No pending review of yours on the PR: GitHub allows one per person and PR, so `run` refuses until you submit or discard the existing one.
 - `gh` logged in as the account that should own the review, with permission to comment on the PR.
-- No `--max-passes`, `--commit` or `--push`: the run is always one pass and never commits or pushes.
+- No `--commit` or `--push`: the run never commits or pushes. `--max-passes` sets the review pass limit.
+
+A run interrupted between passes can resume only at the same starting head. Completed passes retain their findings in `comments.json`; interrupted pass findings are ignored. `show` defaults to the latest pass.
 
 If creating the review fails in a way that leaves its outcome unknown, such as a timeout, LXReview does not retry. Check the PR on GitHub for a pending review before resuming; `resume` refuses while one exists, and a run that already created its review cannot be resumed.
 

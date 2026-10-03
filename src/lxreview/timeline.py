@@ -158,6 +158,8 @@ def describe(
         texts = [
             f"{event.get('decision', '?'):<9} {event.get('finding')} {shorten(event.get('title', ''), limit)}"
         ]
+        if event.get("duplicate_of"):
+            texts[0] += f" (duplicate of {event['duplicate_of']})"
         if event.get("reason"):
             texts.append(f"  because {shorten(event['reason'], limit)}")
     elif kind == "polish_skipped":
@@ -206,11 +208,33 @@ def describe(
         texts = [f"Pushing commit {str(event.get('commit', ''))[:10]}"]
     elif kind == "fixes_pushed":
         texts = [f"Commit {str(event.get('commit', ''))[:10]} pushed"]
+    elif kind == "review_pass_summary":
+        count = event.get("new_substantial", 0)
+        added = (
+            "no new substantial finding"
+            if not count
+            else f"{count} new substantial finding" + ("s" if count != 1 else "")
+        )
+        duplicates = event.get("duplicates", 0)
+        suffix = (
+            "another pass follows"
+            if event.get("continues")
+            else "pass limit reached"
+            if event.get("limit_reached")
+            else "drafting the review"
+        )
+        texts = [
+            f"Reviewer pass {n} added {added}"
+            + (f" ({duplicates} duplicates)" if duplicates else "")
+            + f"; {suffix}"
+        ]
     elif kind == "review_posted":
         texts = [
             f"Draft review created on GitHub: {event.get('inline', 0)} inline,"
             f" {event.get('summary', 0)} in summary — {event.get('url', '')}; submit it there"
         ]
+        if event.get("passes", 1) > 1:
+            texts[0] += f" after {event['passes']} passes"
     elif kind == "diff_capture_failed":
         texts = [f"Diff capture failed for pass {n}"]
     elif kind == "worker_output_invalid":
@@ -238,6 +262,7 @@ def style(text: str) -> str:
         ("Claude: ", "cyan"),
         ("ACCEPTED", "bold green"),
         ("REJECTED", "bold yellow"),
+        ("DUPLICATE", "dim"),
         ("  because ", "dim"),
         ("  still running", "dim"),
         ("$ ", "bright_black"),

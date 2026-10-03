@@ -192,6 +192,7 @@ def test_loop_and_watch_commands_follow_the_run_in_the_chat(paths, tmp_path, mon
     assert "output's `message` value, copied exactly" in loop
     assert "Follow the run" not in (commands / "review-status.md").read_text()
     assert "[--max-passes N] [--commit ask] [--push ask] [--substantial-only]" in loop
+    assert "cannot be combined with `--max-passes`" not in loop
     assert "only after the user explicitly approves" in loop
     approve = (commands / "review-approve.md").read_text()
     assert "approve <run-id> <step>" in approve and "commit or push" in approve

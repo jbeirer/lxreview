@@ -833,7 +833,7 @@ def test_a_review_only_run_needs_only_a_clean_checkout_at_the_pr_head(checkout, 
     # No branch, upstream or push policy: other people's PRs and detached checkouts work.
     assert calls == ["review_checkpoint", "pending_review", "run-" + started["run_id"]]
     state = RunStore(paths, started["run_id"]).load()
-    assert state["review_only"] is True and state["max_passes"] == 1
+    assert state["review_only"] is True and state["max_passes"] == 5
     assert started["message"].startswith(f"Started review-only run `{started['run_id']}` for {PR}.")
     assert (
         "- Accepted findings will be added to a pending review on the PR, visible only to you"
@@ -875,7 +875,6 @@ def test_a_substantial_only_run_says_so_when_it_starts(checkout, paths, tmp_path
             ["https://gitlab.com/g/p/-/merge_requests/3"],
             "Review-only runs post GitHub review comments; GitLab merge requests are not supported",
         ),
-        ([PR, "--max-passes", "2"], "single pass; leave out --max-passes"),
         ([PR, "--push", "ask"], "neither commits nor pushes"),
     ],
 )
@@ -900,7 +899,7 @@ def test_review_only_refuses_while_the_user_has_a_pending_review(checkout, tmp_p
         (0, None, None),
         # A run interrupted while posting may have created the review it never recorded.
         (0, DRAFT, "already have a pending review"),
-        (1, None, "already created its review"),
+        (1, None, None),
     ],
 )
 def test_resuming_a_review_only_run_checks_for_its_review(
@@ -921,8 +920,9 @@ def test_resuming_a_review_only_run_checks_for_its_review(
         assert calls == ["review_checkpoint", "pending_review", "run-" + store.id]
 
 
+@pytest.mark.parametrize("directory", ["pass-01", "pass-02", "pass-02-interrupted-abc"])
 def test_a_review_only_run_that_posted_before_recording_its_pass_is_not_resumed(
-    checkout, paths, tmp_path
+    checkout, paths, tmp_path, directory
 ):
     from pathlib import Path
 
@@ -932,7 +932,7 @@ def test_a_review_only_run_that_posted_before_recording_its_pass_is_not_resumed(
     store = RunStore.create(paths, tmp_path, PR, {"head": "a" * 40}, 1, tmp_path / "audit", True)
     # The worker stopped after creating the review; the user has since submitted it.
     store.update(status="INTERRUPTED", completed_pass=0)
-    posted = Path(store.load()["audit"]) / "pass-01/review-posted.json"
+    posted = Path(store.load()["audit"]) / directory / "review-posted.json"
     posted.parent.mkdir(parents=True)
     posted.write_text(json.dumps({"id": 7, "html_url": DRAFT}))
     result = runner.invoke(app, ["resume", store.id])
@@ -950,3 +950,39 @@ def test_the_timeline_links_the_draft_review():
     )
     assert style(line) == "bold green" and style("Finished: REVIEW_DRAFTED") == "bold green"
     assert PHASES["commenting"] == "drafting the GitHub review"
+
+
+def test_review_only_custom_pass_limit_and_announcement(checkout, paths, tmp_path):
+    from lxreview.runs import RunStore
+
+    result = runner.invoke(
+        app, ["run", PR, "--repo", str(tmp_path), "--review-only", "--max-passes", "3"]
+    )
+    assert result.exit_code == 0
+    started = json.loads(result.stdout)
+    assert RunStore(paths, started["run_id"]).load()["max_passes"] == 3
+    assert "up to 3 review passes on the same PR head" in started["message"]
+
+
+def test_resume_review_only_refuses_changed_starting_head(checkout, paths, tmp_path):
+    from lxreview.runs import RunStore
+
+    store = RunStore.create(paths, tmp_path, PR, {"head": "b" * 40}, 3, tmp_path / "audit", True)
+    store.update(status="FAILED", completed_pass=1)
+    result = runner.invoke(app, ["resume", store.id])
+    assert "The PR head changed between passes" in str(result.exception)
+
+
+def test_show_defaults_to_latest_pass_with_comments(checkout, paths, tmp_path):
+    from pathlib import Path
+
+    from lxreview.runs import RunStore
+
+    store = RunStore.create(paths, tmp_path, PR, {"head": "a" * 40}, 3, tmp_path / "audit", True)
+    store.update(**{"pass": 2})
+    directory = Path(store.load()["audit"]) / "pass-02"
+    directory.mkdir(parents=True)
+    (directory / "comments.json").write_text('{"findings": []}')
+    result = runner.invoke(app, ["show", store.id, "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"comments.json": '{"findings": []}'}

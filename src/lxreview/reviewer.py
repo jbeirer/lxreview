@@ -27,6 +27,13 @@ def prompt_for(request: ReviewRequest) -> str:
         f"If you cannot access or adequately inspect the complete {target.noun} at this head, say so and end exactly with VERDICT: ACCESS_FAILED.",
         "Otherwise end exactly with VERDICT: SUBSTANTIAL_ISSUES if at least one substantial issue exists, or VERDICT: CLEAN if none exists.",
     ]
+    if request.known_findings:
+        parts.insert(
+            4,
+            "Earlier independent review passes of this same head already reported these issues, listed only so you do not repeat them; they say nothing about their validity: "
+            + "; ".join(f"{i}. {title}" for i, title in enumerate(request.known_findings, 1))
+            + ". Do not report them again in any form, nor a variant or another symptom of the same cause; review everything else as thoroughly as a first pass. If no substantial issue exists beyond them, end with VERDICT: CLEAN.",
+        )
     return " | ".join(" ".join(p.splitlines()) for p in parts)
 
 
