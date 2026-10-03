@@ -221,6 +221,8 @@ def describe(
             if event.get("continues")
             else "pass limit reached"
             if event.get("limit_reached")
+            else "earlier-finding limit reached"
+            if event.get("title_limit_reached")
             else "drafting the review"
         )
         texts = [

@@ -1300,6 +1300,41 @@ async def test_title_cap_finalizes_without_losing_comments(paths, tmp_path, gith
     )
     assert store.load()["status"] == "REVIEW_DRAFTED" and store.load()["completed_pass"] == 1
     assert len(github["posted"][0]["comments"]) == 61
+    assert "More than 60 earlier findings" in store.load()["error"]
+    events = [
+        json.loads(line) for line in (store.directory / "events.jsonl").read_text().splitlines()
+    ]
+    summary = next(e for e in events if e["kind"] == "review_pass_summary")
+    assert summary["title_limit_reached"] and not summary["limit_reached"]
+
+
+async def test_ignored_non_blocking_findings_are_not_carried_forward(paths, tmp_path, github):
+    store = review_only(paths, tmp_path, 3)
+    store.update(substantial_only=True)
+    reviewer = Reviewer(
+        [
+            "SUBSTANTIAL [S1] off by one\nNON_BLOCKING [N1] unclear name\n"
+            "VERDICT: SUBSTANTIAL_ISSUES",
+            # The ignored point returns as substantial; it is new, not a duplicate.
+            "SUBSTANTIAL [S1] unclear name\nVERDICT: SUBSTANTIAL_ISSUES",
+            "VERDICT: CLEAN",
+        ]
+    )
+    prompts: list[str] = []
+    turn = reviewing(
+        {"S1": "ACCEPTED"},
+        [Comment(finding="S1", path="src/parse.py", line=12, body="Fix")],
+        prompts,
+    )
+    await execute(paths, Config(), store, reviewer, turn)
+    assert store.load()["status"] == "REVIEW_DRAFTED"
+    assert [r.known_findings for r in reviewer.requests] == [
+        [],
+        ["off by one"],
+        ["off by one", "unclear name"],
+    ]
+    assert "P1-N1" not in prompts[1]
+    assert len(github["posted"][0]["comments"]) == 2
 
 
 async def test_resume_uses_completed_findings_and_ignores_interrupted(paths, tmp_path, github):

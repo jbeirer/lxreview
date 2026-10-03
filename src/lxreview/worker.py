@@ -742,40 +742,46 @@ async def review_only_pass(
     ]
     by_id = {c["finding"]: c for c in drafted}
     decisions = {d.finding: d for d in review.findings}
+    # Only evaluated findings carry forward: an ignored one has no decision to stand by.
     findings = [
         {
             **f,
             "key": pass_key(number, f),
-            "decision": decisions[f["id"]].decision if f["id"] in decisions else None,
-            "duplicate_of": decisions[f["id"]].duplicate_of if f["id"] in decisions else None,
+            "decision": decisions[f["id"]].decision,
+            "duplicate_of": decisions[f["id"]].duplicate_of,
             "comment": by_id.get(f["id"]),
         }
         for f in response.findings
+        if f["id"] in decisions
     ]
     write_json(pass_dir / "comments.json", {"head": head, "pass": number, "findings": findings})
     new_substantial = sum(
         f["classification"] == "SUBSTANTIAL" and f["decision"] == "ACCEPTED" for f in findings
     )
     all_findings = completed_findings(Path(state["audit"]), number + 1, head)
-    continues = bool(
-        new_substantial
-        and number < state["max_passes"]
-        and len(_known_titles(all_findings)) <= KNOWN_LIMIT
+    limit_reached = bool(new_substantial and number == state["max_passes"])
+    title_limit_reached = bool(
+        new_substantial and not limit_reached and len(_known_titles(all_findings)) > KNOWN_LIMIT
     )
+    continues = bool(new_substantial and not limit_reached and not title_limit_reached)
     store.event(
         "review_pass_summary",
         pass_number=number,
         new_substantial=new_substantial,
         duplicates=sum(d.decision == "DUPLICATE" for d in review.findings),
         continues=continues,
-        limit_reached=bool(new_substantial and number == state["max_passes"]),
+        limit_reached=limit_reached,
+        title_limit_reached=title_limit_reached,
     )
     if continues:
         store.update(completed_pass=number)
         return True
     note = (
         "Pass limit reached while the reviewer still found new issues"
-        if new_substantial and number == state["max_passes"]
+        if limit_reached
+        else f"More than {KNOWN_LIMIT} earlier findings; no further pass while the reviewer"
+        " still found new issues"
+        if title_limit_reached
         else ""
     )
     post_review(

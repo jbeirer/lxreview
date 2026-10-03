@@ -716,4 +716,14 @@ def test_multi_pass_timeline():
         }
     )[0]
     assert "added no new substantial finding (2 duplicates); drafting the review" in line
+    line = describe(
+        {
+            "kind": "review_pass_summary",
+            "pass_number": 1,
+            "new_substantial": 61,
+            "title_limit_reached": True,
+            "time": "",
+        }
+    )[0]
+    assert line.endswith("61 new substantial findings; earlier-finding limit reached")
     assert "after 2 passes" in describe({"kind": "review_posted", "passes": 2, "time": ""})[0]
